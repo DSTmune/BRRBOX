@@ -1,0 +1,48 @@
+# Gradle
+.gradle/
+build/
+**/build/
+
+# Local configuration
+local.properties
+
+# IntelliJ / Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# CMake / NDK
+.cxx/
+externalNativeBuild/
+
+# OS Files
+.DS_Store
+
+# Generated files
+captures/
+output.json
+
+# Google Services (if you ever add Firebase)
+google-services.json
+
+# Signing keys (IMPORTANT)
+*.keystore
+*.jks
+
+# Android build outputs
+*.apk
+*.ap_
+*.aab
+
+# Dex files
+*.dex
+
+# Java / Kotlin compiled classes
+*.class
+
+# Log files
+*.log
+
+# Misc
+.navigation/
