@@ -2,18 +2,19 @@ package com.example.brrbox
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -34,7 +35,7 @@ class MainActivity : ComponentActivity() {
     private var statusText = mutableStateOf("Disconnected")
     private var isConnected = mutableStateOf(false)
 
-    // BLE UUIDs - You'll need to update these based on your microcontroller setup
+    // BLE UUIDs - need to update
     private val SERVICE_UUID = UUID.fromString("0000FFE0-0000-1000-8000-00805F9B34FB")
     private val CHARACTERISTIC_UUID = UUID.fromString("0000FFE1-0000-1000-8000-00805F9B34FB")
 
@@ -88,6 +89,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -139,11 +141,19 @@ class MainActivity : ComponentActivity() {
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Button(
-                            onClick = { sendOpenCommand() },
+                            onClick = { sendUnlockCommand() },
                             enabled = isConnected.value,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Send Open")
+                            Text("Send Unlock")
+                        }
+
+                        Button(
+                            onClick = { sendLockCommand() },
+                            enabled = isConnected.value,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Send Lock")
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
@@ -202,7 +212,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun sendOpenCommand() {
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun sendUnlockCommand() {
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
@@ -217,13 +228,43 @@ class MainActivity : ComponentActivity() {
         val characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
 
         if (characteristic != null) {
-            val command = "OPEN"
-            characteristic.value = command.toByteArray()
-            bluetoothGatt?.writeCharacteristic(characteristic)
+            val command = "U"
+            bluetoothGatt?.writeCharacteristic(
+                characteristic,
+                command.toByteArray(),
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            )
         } else {
             statusText.value = "Error: Service not found"
         }
     }
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun sendLockCommand() {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        statusText.value = "Sending message..."
+
+        val service = bluetoothGatt?.getService(SERVICE_UUID)
+        val characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
+
+        if (characteristic != null) {
+            val command = "L"
+            bluetoothGatt?.writeCharacteristic(
+                characteristic,
+                command.toByteArray(),
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            )
+        } else {
+            statusText.value = "Error: Service not found"
+        }
+    }
+
 
     private fun disconnect() {
         if (ActivityCompat.checkSelfPermission(
