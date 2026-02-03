@@ -141,7 +141,7 @@ class MainActivity : ComponentActivity() {
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Button(
-                            onClick = { sendUnlockCommand() },
+                            onClick = { sendCommand("U") },
                             enabled = isConnected.value,
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -149,7 +149,7 @@ class MainActivity : ComponentActivity() {
                         }
 
                         Button(
-                            onClick = { sendLockCommand() },
+                            onClick = { sendCommand("L") },
                             enabled = isConnected.value,
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -213,7 +213,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    private fun sendUnlockCommand() {
+    private fun sendCommand(command: String) {
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
@@ -228,7 +228,6 @@ class MainActivity : ComponentActivity() {
         val characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
 
         if (characteristic != null) {
-            val command = "U"
             bluetoothGatt?.writeCharacteristic(
                 characteristic,
                 command.toByteArray(),
@@ -238,33 +237,6 @@ class MainActivity : ComponentActivity() {
             statusText.value = "Error: Service not found"
         }
     }
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    private fun sendLockCommand() {
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-
-        statusText.value = "Sending message..."
-
-        val service = bluetoothGatt?.getService(SERVICE_UUID)
-        val characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
-
-        if (characteristic != null) {
-            val command = "L"
-            bluetoothGatt?.writeCharacteristic(
-                characteristic,
-                command.toByteArray(),
-                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            )
-        } else {
-            statusText.value = "Error: Service not found"
-        }
-    }
-
 
     private fun disconnect() {
         if (ActivityCompat.checkSelfPermission(
