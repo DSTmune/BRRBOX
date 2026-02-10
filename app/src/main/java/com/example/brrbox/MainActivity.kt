@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.app.ActivityCompat
 import com.example.brrbox.ui.theme.BRRBOXTheme
 import java.util.UUID
@@ -235,6 +236,22 @@ class MainActivity : ComponentActivity() {
             )
         } else {
             statusText.value = "Error: Service not found"
+        }
+    }
+
+    @Composable
+    private fun setTemperature() {
+        Dialog(onDismissRequest = {onDismissRequest() }) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Text(
+                    text = "Hello world!",
+                    modifier = Modifier.fillMaxSize().wrapContentSize(Alignment.Center),
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 
