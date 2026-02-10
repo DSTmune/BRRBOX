@@ -90,7 +90,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    @Composable
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -157,6 +157,15 @@ class MainActivity : ComponentActivity() {
                             Text("Send Lock")
                         }
 
+                        Button(
+                            onClick = { setTemperature() },
+                            enabled = isConnected.value,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Change Temperature")
+                        }
+
+
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Button(
@@ -174,14 +183,13 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
     private fun requestBluetoothPermissions() {
         val permissions = mutableListOf(
             Manifest.permission.BLUETOOTH_SCAN,
             Manifest.permission.BLUETOOTH_CONNECT
         )
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             requestPermissionLauncher.launch(permissions.toTypedArray())
         }
     }
