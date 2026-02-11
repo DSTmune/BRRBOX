@@ -15,18 +15,32 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.app.ActivityCompat
 import com.example.brrbox.ui.theme.BRRBOXTheme
 import java.util.UUID
+import kotlin.math.round
 
 class MainActivity : ComponentActivity() {
     private var bluetoothAdapter: BluetoothAdapter? = null
@@ -35,6 +49,8 @@ class MainActivity : ComponentActivity() {
     // Status states
     private var statusText = mutableStateOf("Disconnected")
     private var isConnected = mutableStateOf(false)
+
+    private var showTemperatureDialog = mutableStateOf(false)
 
     // BLE UUIDs - need to update
     private val SERVICE_UUID = UUID.fromString("0000FFE0-0000-1000-8000-00805F9B34FB")
@@ -90,7 +106,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @Composable
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -139,6 +155,14 @@ class MainActivity : ComponentActivity() {
                             Text("Connect to BRRBOX")
                         }
 
+                        Button(
+                            onClick = { debugConnect() },
+                            enabled = !isConnected.value,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Connect to BRRBOX Debug")
+                        }
+
                         Spacer(modifier = Modifier.height(16.dp))
 
                         Button(
@@ -158,7 +182,7 @@ class MainActivity : ComponentActivity() {
                         }
 
                         Button(
-                            onClick = { setTemperature() },
+                            onClick = { showTemperatureDialog.value = true },
                             enabled = isConnected.value,
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -179,6 +203,15 @@ class MainActivity : ComponentActivity() {
                             Text("Disconnect")
                         }
                     }
+                }
+                if (showTemperatureDialog.value) {
+                    TemperatureDialog(
+                        onDismiss = { showTemperatureDialog.value = false },
+                        onConfirm = { temp ->
+                            sendCommand("T$temp")
+                            showTemperatureDialog.value = false
+                        }
+                    )
                 }
             }
         }
@@ -221,6 +254,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun debugConnect() {
+        isConnected.value = !isConnected.value
+        statusText.value = if (isConnected.value) {
+            "Debug Mode - Connected (Fake)"
+        } else {
+            "Debug Mode - Disconnected"
+        }
+    }
+
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun sendCommand(command: String) {
         if (ActivityCompat.checkSelfPermission(
@@ -248,21 +290,129 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun setTemperature() {
-        Dialog(onDismissRequest = {onDismissRequest() }) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp)
+    fun TemperatureDialog(
+        onDismiss: () -> Unit,
+        onConfirm: (Int) -> Unit
+    ) {
+        var sliderPosition by remember { mutableFloatStateOf(0f) }
+        val radioOptions = listOf("°F", "°C")
+        val (selectedOption, onOptionSelected) = remember { mutableStateOf(radioOptions[0]) }
+        var isFocused by remember { mutableStateOf(false) }
+        var text by remember { mutableStateOf("10.0") }
+        val focusManager = LocalFocusManager.current
+        Dialog(onDismissRequest = {onDismiss}) {
+            Box(
+                modifier = Modifier
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember {MutableInteractionSource()}
+                    ){
+                        focusManager.clearFocus()
+                    },
             ) {
-                Text(
-                    text = "Hello world!",
-                    modifier = Modifier.fillMaxSize().wrapContentSize(Alignment.Center),
-                    textAlign = TextAlign.Center
-                )
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(375.dp),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize(),
+                        verticalArrangement = Arrangement.Center,
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "Input a Temperature.",
+                            modifier = Modifier.padding(16.dp),
+                            textAlign = TextAlign.Center
+                        )
+                        Slider(
+                            value = sliderPosition,
+                            onValueChange= {sliderPosition = it},
+                            valueRange = if (selectedOption == "°F") -4f..50f else -20f..10f,
+                            steps = if (selectedOption == "°F") (50+4)-1 else (10+20)-1
+                        )
+                        OutlinedTextField(
+                            modifier = Modifier.onFocusChanged { focusState ->
+                                isFocused = focusState.isFocused
+                                if (!isFocused){
+                                    sliderPosition = text.toFloat()
+                                }
+                            },
+                            value = if (isFocused) text else round(sliderPosition).toString(),
+                            onValueChange = { newValue ->
+                                text = newValue
+                            },
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Done
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onDone = { focusManager.clearFocus() }
+                            ),
+                            singleLine = true
+                        )
+                        Text(text = selectedOption)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectableGroup(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            radioOptions.forEach { text ->
+                                Row(
+                                    Modifier
+                                        .height(56.dp)
+                                        .selectable(
+                                            selected = (text == selectedOption),
+                                            onClick = { onOptionSelected(text) },
+                                            role = Role.RadioButton
+                                        )
+                                        .padding(horizontal = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    RadioButton(
+                                        selected = (text == selectedOption),
+                                        onClick = null // null recommended for accessibility with screen readers
+                                    )
+                                    Text(
+                                        text = text,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        modifier = Modifier.padding(start = 16.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            TextButton(
+                                onClick = { sliderPosition = 0.4F },
+                                modifier = Modifier.padding(8.dp),
+                            ) {
+                                Text("Test")
+                            }
+                            TextButton(
+                                onClick = { onConfirm(5) },
+                                modifier = Modifier.padding(8.dp),
+                            ) {
+                                Text("Set")
+                            }
+                            TextButton(
+                                onClick = { onDismiss() },
+                                modifier = Modifier.padding(8.dp),
+                            ) {
+                                Text("Cancel")
+                            }
+                        }
+                    }
+                }
             }
-        }
     }
-
+}
     private fun disconnect() {
         if (ActivityCompat.checkSelfPermission(
                 this,
