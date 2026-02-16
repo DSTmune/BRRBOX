@@ -10,6 +10,7 @@ import android.bluetooth.BluetoothProfile
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.service.controls.actions.CommandAction
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -23,11 +24,20 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AcUnit
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.*
+import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
@@ -40,6 +50,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.ActivityCompat
+import androidx.navigation.NavHostController
+import androidx.navigation.compose.rememberNavController
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
 import com.example.brrbox.ui.theme.BRRBOXTheme
 import java.util.UUID
 
@@ -107,7 +121,171 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    @Composable
+    fun CommandScreen(modifier: Modifier = Modifier) {
+        Scaffold (
+            modifier = Modifier.fillMaxSize(),
+        ) { contentPadding ->
+            Column(
+                modifier = Modifier.padding(contentPadding).fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    "BRRBOX Controller",
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectableGroup(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Button(
+                        onClick = { sendCommand("U") },
+                        enabled = isConnected.value,
+                        modifier = Modifier.weight(12f)
+                    ) {
+                        Text("Unlock")
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    Button(
+                        onClick = { sendCommand("L") },
+                        enabled = isConnected.value,
+                        modifier = Modifier.weight(12f)
+                    ) {
+                        Text("Lock")
+                    }
+                }
+                Button(
+                    onClick = { showTemperatureDialog.value = true },
+                    enabled = isConnected.value,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Change Temperature")
+                }
+
+                Button(
+                    onClick = { sendCommand("D") },
+                    enabled = isConnected.value,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Get Logging Data")
+                }
+            }
+        }
+        if (showTemperatureDialog.value) {
+            TemperatureDialog(
+                onDismiss = { showTemperatureDialog.value = false },
+                onConfirm = { temp ->
+                    sendCommand("T$temp")
+                    showTemperatureDialog.value = false
+                }
+            )
+        }
+    }
+    @Composable
+    fun BluetoothScreen(modifier: Modifier = Modifier) {
+        Scaffold (
+            modifier = Modifier.fillMaxSize()
+        ) { contentPadding ->
+            Column(
+                modifier = Modifier.padding(contentPadding).fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    "Bluetooth Pairing",
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    statusText.value,
+                    fontSize = 18.sp,
+                    color = when {
+                        statusText.value.contains("Connected") -> MaterialTheme.colorScheme.primary
+                        statusText.value.contains("failed") -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurface
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(48.dp))
+
+                Button(
+                    onClick = { connectToBRRBOX() },
+                    enabled = !isConnected.value,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Connect to BRRBOX")
+                }
+
+                Button(
+                    onClick = { debugConnect() },
+                    enabled = !isConnected.value,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Connect to BRRBOX Debug")
+                }
+
+                Button(
+                    onClick = { disconnect() },
+                    enabled = isConnected.value,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Disconnect from BRRBOX")
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+        }
+    }
+    @Composable
+    fun TempDataScreen(modifier: Modifier = Modifier) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("To be implemented!")
+        }
+    }
+    @Composable
+    fun LoginScreen(modifier: Modifier = Modifier) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("To be implemented!")
+        }
+    }
+    @Composable
+    fun DebugScreen(modifier: Modifier = Modifier) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("To be implemented!")
+        }
+    }
+
+    enum class Destination(
+        val route: String,
+        val label: String,
+        val icon: ImageVector,
+        val contentDescription: String
+    ){
+        COMMAND("sendcommand", "Control", Icons.Default.AcUnit,"Control the Device"),
+        BLUETOOTH("bluetooth", "Bluetooth",Icons.Default.Bluetooth,"Bluetooth Connection"),
+        TEMPDATA("data", "Logs",Icons.Default.Archive,"View Temperature Logs"),
+        LOGIN("login", "Account",Icons.Default.AccountCircle,"Login to User Account"),
+        DEBUG("debug", "Debug",Icons.Default.Terminal,"Debug Logs"),
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -116,119 +294,73 @@ class MainActivity : ComponentActivity() {
         bluetoothAdapter = bluetoothManager.adapter
 
         requestBluetoothPermissions()
-
+        
         setContent {
-            BRRBOXTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding)
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            "BRRBOX",
-                            fontSize = 48.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+            MaterialTheme {
+                mainScreen()
+            }
+        }
+        
+    }
 
-                        Spacer(modifier = Modifier.height(32.dp))
-
-                        Text(
-                            statusText.value,
-                            fontSize = 18.sp,
-                            color = when {
-                                statusText.value.contains("Connected") -> MaterialTheme.colorScheme.primary
-                                statusText.value.contains("failed") -> MaterialTheme.colorScheme.error
-                                else -> MaterialTheme.colorScheme.onSurface
-                            }
-                        )
-
-                        Spacer(modifier = Modifier.height(48.dp))
-
-                        Button(
-                            onClick = { connectToBRRBOX() },
-                            enabled = !isConnected.value,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Connect to BRRBOX")
-                        }
-
-                        Button(
-                            onClick = { debugConnect() },
-                            enabled = !isConnected.value,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Connect to BRRBOX Debug")
-                        }
-
-                        Button(
-                            onClick = { disconnect() },
-                            enabled = isConnected.value,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error
-                            )
-                        ) {
-                            Text("Disconnect from BRRBOX")
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .selectableGroup(),
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            Button(
-                                onClick = { sendCommand("U") },
-                                enabled = isConnected.value,
-                                modifier = Modifier.weight(12f)
-                            ) {
-                                Text("Send Unlock")
-                            }
-                            Spacer(modifier = Modifier.weight(1f))
-                            Button(
-                                onClick = { sendCommand("L") },
-                                enabled = isConnected.value,
-                                modifier = Modifier.weight(12f)
-                            ) {
-                                Text("Send Lock")
-                            }
-                        }
-
-                        Button(
-                            onClick = { showTemperatureDialog.value = true },
-                            enabled = isConnected.value,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Change Temperature")
-                        }
-
-                        Button(
-                            onClick = { sendCommand("D") },
-                            enabled = isConnected.value,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Get Logging Data")
-                        }
+    @Composable
+    fun AppNavHost(
+        navController: NavHostController,
+        startDestination: Destination,
+        modifier: Modifier = Modifier
+    ) {
+        NavHost(
+            navController,
+            startDestination = startDestination.route
+        ) {
+            Destination.entries.forEach { destination ->
+                composable(destination.route) {
+                    when (destination) {
+                        Destination.COMMAND -> CommandScreen()
+                        Destination.BLUETOOTH -> BluetoothScreen()
+                        Destination.TEMPDATA -> TempDataScreen()
+                        Destination.LOGIN -> LoginScreen()
+                        Destination.DEBUG -> DebugScreen()
                     }
-                }
-                if (showTemperatureDialog.value) {
-                    TemperatureDialog(
-                        onDismiss = { showTemperatureDialog.value = false },
-                        onConfirm = { temp ->
-                            sendCommand("T$temp")
-                            showTemperatureDialog.value = false
-                        }
-                    )
                 }
             }
         }
     }
-    private fun requestBluetoothPermissions() {
+
+    @Composable
+    fun mainScreen(modifier: Modifier = Modifier) {
+        val navController = rememberNavController()
+        val startDestination = Destination.COMMAND
+        var selectedDestination by rememberSaveable {mutableIntStateOf(startDestination.ordinal)}
+
+        Scaffold(
+            modifier = modifier,
+            bottomBar = {
+                NavigationBar(windowInsets = NavigationBarDefaults.windowInsets) {
+                    Destination.entries.forEachIndexed { index, destination ->
+                        NavigationBarItem(
+                            selected = selectedDestination == index,
+                            onClick = {
+                                navController.navigate(route = destination.route)
+                                selectedDestination = index
+                            },
+                            icon = {
+                                Icon(
+                                    destination.icon,
+                                    contentDescription = destination.contentDescription
+                                )
+                            },
+                            label = { Text(destination.label) }
+                        )
+                    }
+                }
+            }
+        ) { contentPadding ->
+            AppNavHost(navController, startDestination, modifier = Modifier.padding(contentPadding))
+        }
+    }
+
+    fun requestBluetoothPermissions() {
         val permissions = mutableListOf(
             Manifest.permission.BLUETOOTH_SCAN,
             Manifest.permission.BLUETOOTH_CONNECT
@@ -239,7 +371,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun connectToBRRBOX() {
+    fun connectToBRRBOX() {
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
@@ -266,7 +398,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun debugConnect() {
+    fun debugConnect() {
         isConnected.value = !isConnected.value
         statusText.value = if (isConnected.value) {
             "Debug Mode - Connected (Fake)"
@@ -276,7 +408,7 @@ class MainActivity : ComponentActivity() {
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    private fun sendCommand(command: String) {
+    fun sendCommand(command: String) {
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
@@ -451,7 +583,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun disconnect() {
+    fun disconnect() {
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.BLUETOOTH_CONNECT
