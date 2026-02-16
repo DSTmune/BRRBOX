@@ -42,7 +42,6 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.ActivityCompat
 import com.example.brrbox.ui.theme.BRRBOXTheme
 import java.util.UUID
-import kotlin.math.round
 
 class MainActivity : ComponentActivity() {
     private var bluetoothAdapter: BluetoothAdapter? = null
@@ -305,27 +304,22 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun TemperatureDialog(
         onDismiss: () -> Unit,
-        onConfirm: (Int) -> Unit
+        onConfirm: (String) -> Unit
     ) {
-        var temperature by remember { mutableFloatStateOf(32f) } // Single source of truth
+        var temperature by remember { mutableStateOf("32") }
         val radioOptions = listOf("°F", "°C")
         val (selectedOption, onOptionSelected) = remember { mutableStateOf(radioOptions[0]) }
-        var textFieldValue by remember { mutableStateOf("32") }
-        var isTextFieldFocused by remember { mutableStateOf(false) }
         val focusManager = LocalFocusManager.current
         val keyboardController = LocalSoftwareKeyboardController.current
 
-        // Function to apply text field value to temperature
-        fun applyTextFieldValue() {
-            val newValue = textFieldValue.toFloatOrNull()
-            if (newValue != null) {
-                val minRange = if (selectedOption == "°F") -4f else -20f
-                val maxRange = if (selectedOption == "°F") 120f else 50f
-                temperature = newValue.coerceIn(minRange, maxRange)
-                textFieldValue = round(temperature).toInt().toString()
+        fun getTempInCelsius(): String {
+            val tempValue = temperature.toFloatOrNull() ?: 0f
+            val celsius = if (selectedOption == "°F") {
+                (tempValue - 32) * 5f / 9f
             } else {
-                textFieldValue = round(temperature).toInt().toString()
+                tempValue
             }
+            return String.format("%.1f", celsius)
         }
 
         Dialog(
@@ -338,9 +332,6 @@ class MainActivity : ComponentActivity() {
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() }
                     ) {
-                        if (isTextFieldFocused) {
-                            applyTextFieldValue()
-                        }
                         focusManager.clearFocus()
                     },
             ) {
@@ -362,52 +353,25 @@ class MainActivity : ComponentActivity() {
                             textAlign = TextAlign.Center
                         )
 
-                        Slider(
+                        OutlinedTextField(
                             value = temperature,
                             onValueChange = { newValue ->
-                                temperature = newValue
-                                if (!isTextFieldFocused) {
-                                    textFieldValue = round(newValue).toInt().toString()
-                                }
-                            },
-                            valueRange = if (selectedOption == "°F") -4f..120f else -20f..50f,
-                            steps = if (selectedOption == "°F") 123 else 69
-                        )
-
-                        OutlinedTextField(
-                            modifier = Modifier.onFocusChanged { focusState ->
-                                val wasFocused = isTextFieldFocused
-                                isTextFieldFocused = focusState.isFocused
-
-                                if (wasFocused && !focusState.isFocused) {
-                                    applyTextFieldValue()
-                                }
-
-                                if (!wasFocused && focusState.isFocused) {
-                                    textFieldValue = round(temperature).toInt().toString()
-                                }
-                            },
-                            value = textFieldValue,
-                            onValueChange = { newValue ->
                                 if (newValue.isEmpty() || newValue.matches(Regex("^-?\\d*\\.?\\d*$"))) {
-                                    textFieldValue = newValue
+                                    temperature = newValue
                                 }
                             },
                             keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Number,
+                                keyboardType = KeyboardType.Decimal,
                                 imeAction = ImeAction.Done
                             ),
                             keyboardActions = KeyboardActions(
                                 onDone = {
-                                    applyTextFieldValue()
                                     keyboardController?.hide()
                                     focusManager.clearFocus()
                                 }
                             ),
                             singleLine = true
                         )
-
-                        Text(text = selectedOption)
 
                         Row(
                             modifier = Modifier
@@ -423,18 +387,15 @@ class MainActivity : ComponentActivity() {
                                             selected = (option == selectedOption),
                                             onClick = {
                                                 if (option != selectedOption) {
-                                                    if (isTextFieldFocused) {
-                                                        applyTextFieldValue()
+                                                    val tempValue = temperature.toFloatOrNull()
+                                                    if (tempValue != null) {
+                                                        val converted = if (selectedOption == "°F") {
+                                                            (tempValue - 32) * 5f / 9f
+                                                        } else {
+                                                            tempValue * 9f / 5f + 32
+                                                        }
+                                                        temperature = String.format("%.1f", converted)
                                                     }
-
-                                                    temperature = if (selectedOption == "°F") {
-                                                        (temperature - 32) * 5f / 9f
-                                                    } else {
-                                                        temperature * 9f / 5f + 32
-                                                    }
-
-                                                    textFieldValue = round(temperature).toInt().toString()
-
                                                     onOptionSelected(option)
                                                 }
                                             },
@@ -463,8 +424,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             TextButton(
                                 onClick = {
-                                    temperature = if (selectedOption == "°F") 32f else 0f
-                                    textFieldValue = temperature.toInt().toString()
+                                    temperature = if (selectedOption == "°F") "32" else "0"
                                 },
                                 modifier = Modifier.padding(8.dp),
                             ) {
@@ -472,10 +432,7 @@ class MainActivity : ComponentActivity() {
                             }
                             TextButton(
                                 onClick = {
-                                    if (isTextFieldFocused) {
-                                        applyTextFieldValue()
-                                    }
-                                    onConfirm(round(temperature).toInt())
+                                    onConfirm(getTempInCelsius())
                                 },
                                 modifier = Modifier.padding(8.dp),
                             ) {
@@ -493,6 +450,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
     private fun disconnect() {
         if (ActivityCompat.checkSelfPermission(
                 this,
