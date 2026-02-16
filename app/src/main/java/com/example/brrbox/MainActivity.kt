@@ -165,22 +165,39 @@ class MainActivity : ComponentActivity() {
                             Text("Connect to BRRBOX Debug")
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
-
                         Button(
-                            onClick = { sendCommand("U") },
+                            onClick = { disconnect() },
                             enabled = isConnected.value,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            )
                         ) {
-                            Text("Send Unlock")
+                            Text("Disconnect from BRRBOX")
                         }
 
-                        Button(
-                            onClick = { sendCommand("L") },
-                            enabled = isConnected.value,
-                            modifier = Modifier.fillMaxWidth()
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .selectableGroup(),
+                            horizontalArrangement = Arrangement.Center
                         ) {
-                            Text("Send Lock")
+                            Button(
+                                onClick = { sendCommand("U") },
+                                enabled = isConnected.value,
+                                modifier = Modifier.weight(12f)
+                            ) {
+                                Text("Send Unlock")
+                            }
+                            Spacer(modifier = Modifier.weight(1f))
+                            Button(
+                                onClick = { sendCommand("L") },
+                                enabled = isConnected.value,
+                                modifier = Modifier.weight(12f)
+                            ) {
+                                Text("Send Lock")
+                            }
                         }
 
                         Button(
@@ -191,18 +208,12 @@ class MainActivity : ComponentActivity() {
                             Text("Change Temperature")
                         }
 
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
                         Button(
-                            onClick = { disconnect() },
+                            onClick = { sendCommand("D") },
                             enabled = isConnected.value,
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error
-                            )
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Disconnect")
+                            Text("Get Logging Data")
                         }
                     }
                 }
@@ -296,13 +307,27 @@ class MainActivity : ComponentActivity() {
         onDismiss: () -> Unit,
         onConfirm: (Int) -> Unit
     ) {
-        var sliderPosition by remember { mutableFloatStateOf(0f) }
+        var temperature by remember { mutableFloatStateOf(32f) } // Single source of truth
         val radioOptions = listOf("°F", "°C")
         val (selectedOption, onOptionSelected) = remember { mutableStateOf(radioOptions[0]) }
-        var isFocused by remember { mutableStateOf(false) }
-        var text by remember { mutableStateOf("10.0") }
+        var textFieldValue by remember { mutableStateOf("32") }
+        var isTextFieldFocused by remember { mutableStateOf(false) }
         val focusManager = LocalFocusManager.current
         val keyboardController = LocalSoftwareKeyboardController.current
+
+        // Function to apply text field value to temperature
+        fun applyTextFieldValue() {
+            val newValue = textFieldValue.toFloatOrNull()
+            if (newValue != null) {
+                val minRange = if (selectedOption == "°F") -4f else -20f
+                val maxRange = if (selectedOption == "°F") 120f else 50f
+                temperature = newValue.coerceIn(minRange, maxRange)
+                textFieldValue = round(temperature).toInt().toString()
+            } else {
+                textFieldValue = round(temperature).toInt().toString()
+            }
+        }
+
         Dialog(
             onDismissRequest = onDismiss,
             properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -311,8 +336,11 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .clickable(
                         indication = null,
-                        interactionSource = remember {MutableInteractionSource()}
-                    ){
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) {
+                        if (isTextFieldFocused) {
+                            applyTextFieldValue()
+                        }
                         focusManager.clearFocus()
                     },
             ) {
@@ -333,22 +361,37 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.padding(16.dp),
                             textAlign = TextAlign.Center
                         )
+
                         Slider(
-                            value = sliderPosition,
-                            onValueChange= {sliderPosition = it},
-                            valueRange = if (selectedOption == "°F") -4f..50f else -20f..10f,
-                            steps = if (selectedOption == "°F") (50+4)-1 else (10+20)-1
-                        )
-                        OutlinedTextField(
-                            modifier = Modifier.onFocusChanged { focusState ->
-                                isFocused = focusState.isFocused
-                                if (!isFocused){
-                                    sliderPosition = text.toFloat()
+                            value = temperature,
+                            onValueChange = { newValue ->
+                                temperature = newValue
+                                if (!isTextFieldFocused) {
+                                    textFieldValue = round(newValue).toInt().toString()
                                 }
                             },
-                            value = if (isFocused) text else round(sliderPosition).toString(),
+                            valueRange = if (selectedOption == "°F") -4f..120f else -20f..50f,
+                            steps = if (selectedOption == "°F") 123 else 69
+                        )
+
+                        OutlinedTextField(
+                            modifier = Modifier.onFocusChanged { focusState ->
+                                val wasFocused = isTextFieldFocused
+                                isTextFieldFocused = focusState.isFocused
+
+                                if (wasFocused && !focusState.isFocused) {
+                                    applyTextFieldValue()
+                                }
+
+                                if (!wasFocused && focusState.isFocused) {
+                                    textFieldValue = round(temperature).toInt().toString()
+                                }
+                            },
+                            value = textFieldValue,
                             onValueChange = { newValue ->
-                                text = newValue
+                                if (newValue.isEmpty() || newValue.matches(Regex("^-?\\d*\\.?\\d*$"))) {
+                                    textFieldValue = newValue
+                                }
                             },
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Number,
@@ -356,69 +399,84 @@ class MainActivity : ComponentActivity() {
                             ),
                             keyboardActions = KeyboardActions(
                                 onDone = {
+                                    applyTextFieldValue()
                                     keyboardController?.hide()
                                     focusManager.clearFocus()
                                 }
                             ),
                             singleLine = true
                         )
+
                         Text(text = selectedOption)
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .selectableGroup(),
                             horizontalArrangement = Arrangement.Center
                         ) {
-                            radioOptions.forEach { text ->
+                            radioOptions.forEach { option ->
                                 Row(
                                     Modifier
                                         .height(56.dp)
                                         .selectable(
-                                            selected = (text == selectedOption),
+                                            selected = (option == selectedOption),
                                             onClick = {
-                                                if (text != selectedOption)
-                                                {
-                                                    if (selectedOption == "°F")
-                                                    {
-                                                        sliderPosition = (sliderPosition-32) * 5f/9f
+                                                if (option != selectedOption) {
+                                                    if (isTextFieldFocused) {
+                                                        applyTextFieldValue()
                                                     }
-                                                    else
-                                                    {
-                                                        sliderPosition = sliderPosition * 9f/5f + 32
+
+                                                    temperature = if (selectedOption == "°F") {
+                                                        (temperature - 32) * 5f / 9f
+                                                    } else {
+                                                        temperature * 9f / 5f + 32
                                                     }
+
+                                                    textFieldValue = round(temperature).toInt().toString()
+
+                                                    onOptionSelected(option)
                                                 }
-                                                onOptionSelected(text)
-                                                      },
+                                            },
                                             role = Role.RadioButton
                                         )
                                         .padding(horizontal = 16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     RadioButton(
-                                        selected = (text == selectedOption),
+                                        selected = (option == selectedOption),
                                         onClick = null
                                     )
                                     Text(
-                                        text = text,
+                                        text = option,
                                         style = MaterialTheme.typography.bodyLarge,
                                         modifier = Modifier.padding(start = 16.dp)
                                     )
                                 }
                             }
                         }
+
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth(),
                             horizontalArrangement = Arrangement.Center
                         ) {
                             TextButton(
-                                onClick = { sliderPosition = 0.4F },
+                                onClick = {
+                                    temperature = if (selectedOption == "°F") 32f else 0f
+                                    textFieldValue = temperature.toInt().toString()
+                                },
                                 modifier = Modifier.padding(8.dp),
                             ) {
-                                Text("Test")
+                                Text("Reset")
                             }
                             TextButton(
-                                onClick = { onConfirm(5) },
+                                onClick = {
+                                    if (isTextFieldFocused) {
+                                        applyTextFieldValue()
+                                    }
+                                    onConfirm(round(temperature).toInt())
+                                },
                                 modifier = Modifier.padding(8.dp),
                             ) {
                                 Text("Set")
@@ -433,8 +491,8 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
     }
-}
     private fun disconnect() {
         if (ActivityCompat.checkSelfPermission(
                 this,
