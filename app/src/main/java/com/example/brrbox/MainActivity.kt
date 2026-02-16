@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -37,6 +38,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.ActivityCompat
 import com.example.brrbox.ui.theme.BRRBOXTheme
 import java.util.UUID
@@ -300,7 +302,11 @@ class MainActivity : ComponentActivity() {
         var isFocused by remember { mutableStateOf(false) }
         var text by remember { mutableStateOf("10.0") }
         val focusManager = LocalFocusManager.current
-        Dialog(onDismissRequest = {onDismiss}) {
+        val keyboardController = LocalSoftwareKeyboardController.current
+        Dialog(
+            onDismissRequest = onDismiss,
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
             Box(
                 modifier = Modifier
                     .clickable(
@@ -349,7 +355,10 @@ class MainActivity : ComponentActivity() {
                                 imeAction = ImeAction.Done
                             ),
                             keyboardActions = KeyboardActions(
-                                onDone = { focusManager.clearFocus() }
+                                onDone = {
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus()
+                                }
                             ),
                             singleLine = true
                         )
@@ -366,7 +375,20 @@ class MainActivity : ComponentActivity() {
                                         .height(56.dp)
                                         .selectable(
                                             selected = (text == selectedOption),
-                                            onClick = { onOptionSelected(text) },
+                                            onClick = {
+                                                if (text != selectedOption)
+                                                {
+                                                    if (selectedOption == "°F")
+                                                    {
+                                                        sliderPosition = (sliderPosition-32) * 5f/9f
+                                                    }
+                                                    else
+                                                    {
+                                                        sliderPosition = sliderPosition * 9f/5f + 32
+                                                    }
+                                                }
+                                                onOptionSelected(text)
+                                                      },
                                             role = Role.RadioButton
                                         )
                                         .padding(horizontal = 16.dp),
@@ -374,7 +396,7 @@ class MainActivity : ComponentActivity() {
                                 ) {
                                     RadioButton(
                                         selected = (text == selectedOption),
-                                        onClick = null // null recommended for accessibility with screen readers
+                                        onClick = null
                                     )
                                     Text(
                                         text = text,
