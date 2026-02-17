@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -46,9 +48,12 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.ActivityCompat
@@ -57,15 +62,21 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.example.brrbox.ui.theme.BRRBOXTheme
+import com.github.mikephil.charting.data.LineDataSet
 import java.util.Locale
 import java.util.UUID
+import androidx.core.graphics.toColorInt
+import com.github.mikephil.charting.charts.LineChart
+import com.github.mikephil.charting.data.Entry
+import com.github.mikephil.charting.data.LineData
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var bluetoothGatt: BluetoothGatt? = null
 
     // Status states
-    private var statusText = mutableStateOf("Disconnected")
     private var isConnected = mutableStateOf(false)
     private var debugLog = mutableStateOf(mutableListOf<String>())
     private val discoveredDevices = mutableSetOf<String>()
@@ -91,8 +102,8 @@ class MainActivity : ComponentActivity() {
 
     private fun addLog(message: String) {
         val currentLog = debugLog.value.toMutableList()
-        currentLog.add(0, message) // Add to beginning
-        if (currentLog.size > 50) { // Keep last 20 logs
+        currentLog.add(0, LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))+"  "+message) // Add to beginning
+        if (currentLog.size > 100) { // Keep last 20 logs
             currentLog.removeAt(currentLog.lastIndex)
         }
         debugLog.value = currentLog
@@ -296,22 +307,220 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun TempDataScreen(modifier: Modifier = Modifier) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("We out here")
+        Scaffold(
+            modifier = Modifier.fillMaxSize()
+        ) { contentPadding ->
+            Column(
+                modifier = Modifier
+                    .padding(contentPadding)
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    "Data Logging",
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                AndroidView(
+                    factory = { context ->
+                        val dummyData = listOf(
+                            Entry(0f, 14.2f), Entry(1f, 13.8f), Entry(2f, 13.1f),
+                            Entry(3f, 12.4f), Entry(4f, 12.9f), Entry(5f, 14.0f),
+                            Entry(6f, 16.3f), Entry(7f, 18.7f), Entry(8f, 21.0f),
+                            Entry(9f, 23.4f), Entry(10f, 25.1f), Entry(11f, 26.8f),
+                            Entry(12f, 27.9f), Entry(13f, 27.3f), Entry(14f, 26.0f),
+                            Entry(15f, 24.2f), Entry(16f, 22.0f), Entry(17f, 20.1f),
+                            Entry(18f, 18.5f), Entry(19f, 17.2f), Entry(20f, 16.0f),
+                            Entry(21f, 15.1f), Entry(22f, 14.8f), Entry(23f, 14.4f)
+                        )
+
+                        val dataSet = LineDataSet(dummyData, "Temperature (°C)").apply {
+                            color = "#E84040".toColorInt()
+                            setCircleColor("#E84040".toColorInt())
+                            circleRadius = 3f
+                            circleHoleRadius = 1.5f
+                            circleHoleColor = android.graphics.Color.WHITE
+                            lineWidth = 2f
+                            setDrawValues(false)
+                            setDrawFilled(true)
+                            fillColor = "#E84040".toColorInt()
+                            fillAlpha = 40
+                            mode = LineDataSet.Mode.CUBIC_BEZIER
+                        }
+
+                        LineChart(context).apply {
+                            data = LineData(dataSet)
+
+                            xAxis.apply {
+                                position = com.github.mikephil.charting.components.XAxis.XAxisPosition.BOTTOM
+                                granularity = 1f
+                                setLabelCount(6, false)
+                                textColor = android.graphics.Color.GRAY
+                                gridColor = android.graphics.Color.LTGRAY
+                                valueFormatter = object : com.github.mikephil.charting.formatter.ValueFormatter() {
+                                    override fun getFormattedValue(value: Float): String {
+                                        val h = value.toInt() % 24
+                                        return when {
+                                            h == 0  -> "12 AM"
+                                            h < 12  -> "$h AM"
+                                            h == 12 -> "12 PM"
+                                            else    -> "${h - 12} PM"
+                                        }
+                                    }
+                                }
+                            }
+
+                            axisLeft.apply {
+                                textColor = android.graphics.Color.GRAY
+                                gridColor = android.graphics.Color.LTGRAY
+                                axisMinimum = 10f
+                                axisMaximum = 32f
+                                granularity = 5f
+                                valueFormatter = object : com.github.mikephil.charting.formatter.ValueFormatter() {
+                                    override fun getFormattedValue(value: Float) = "${value.toInt()}°C"
+                                }
+                            }
+
+                            axisRight.isEnabled = false
+                            description.isEnabled = false
+                            legend.textColor = android.graphics.Color.GRAY
+                            setTouchEnabled(true)
+                            isDragEnabled = true
+                            setScaleEnabled(true)
+                            setPinchZoom(true)
+                            setExtraOffsets(8f, 8f, 8f, 8f)
+                            animateX(1000)
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(280.dp)
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectableGroup(),
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Button(
+                        onClick = { sendCommand("D") },
+                        enabled = isConnected.value,
+                        modifier = Modifier.weight(12f)
+                    ) {
+                        Text("Get Logging Data")
+                    }
+                    Spacer(modifier = Modifier.weight(1f))
+                    Button(
+                        onClick = { },
+                        enabled = false,
+                        modifier = Modifier.weight(12f)
+                    ) {
+                        Text("Save Logging Data")
+                    }
+                }
+            }
         }
     }
     @Composable
     fun LoginScreen(modifier: Modifier = Modifier) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("To be implemented!")
+        var username by remember { mutableStateOf("") }
+        var password by remember { mutableStateOf("") }
+        var currentLogin = remember { mutableStateOf<String?>(null) }
+        var visible by remember { mutableStateOf(false) }
+
+        Scaffold(
+            modifier = Modifier.fillMaxSize()
+        ) { contentPadding ->
+            Column(
+                modifier = Modifier
+                    .padding(contentPadding)
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    "Account Login",
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(if (currentLogin.value != null) "Signed in as ${currentLogin.value}" else "Not signed in")
+
+                Spacer(modifier = Modifier.height(48.dp))
+
+                OutlinedTextField(
+                    value = username,
+                    onValueChange = { username = it },
+                    singleLine = true,
+                    label = { Text("Username") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Wrap in a Box so the icon sits inside/at the end of the field
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        singleLine = true,
+                        label = { Text("Password") },
+                        visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { visible = !visible }) {
+                                Icon(
+                                    imageVector = if (visible) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                    contentDescription = if (visible) "Hide password" else "Show password"
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            currentLogin.value = username
+                            username = ""
+                            password = ""
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Sign In")
+                    }
+                    Button(
+                        onClick = { currentLogin.value = null },
+                        enabled = currentLogin.value != null,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Log Out")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
         }
     }
     @Composable
@@ -681,14 +890,6 @@ class MainActivity : ComponentActivity() {
                                 .fillMaxWidth(),
                             horizontalArrangement = Arrangement.Center
                         ) {
-                            TextButton(
-                                onClick = {
-                                    temperature = if (selectedOption == "°F") "32" else "0"
-                                },
-                                modifier = Modifier.padding(8.dp),
-                            ) {
-                                Text("Reset")
-                            }
                             TextButton(
                                 onClick = {
                                     onConfirm(getTempInCelsius())
