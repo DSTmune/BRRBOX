@@ -16,6 +16,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanResult
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -55,6 +57,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.example.brrbox.ui.theme.BRRBOXTheme
+import java.util.Locale
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -64,20 +67,69 @@ class MainActivity : ComponentActivity() {
     // Status states
     private var statusText = mutableStateOf("Disconnected")
     private var isConnected = mutableStateOf(false)
+    private var debugLog = mutableStateOf(mutableListOf<String>())
+    private val discoveredDevices = mutableSetOf<String>()
 
     private var showTemperatureDialog = mutableStateOf(false)
 
     // BLE UUIDs - need to update
-    private val SERVICE_UUID = UUID.fromString("0000FFE0-0000-1000-8000-00805F9B34FB")
-    private val CHARACTERISTIC_UUID = UUID.fromString("0000FFE1-0000-1000-8000-00805F9B34FB")
+    private val SERVICE_UUID = UUID.fromString("49535343-FE7D-4AE5-8FA9-9FAFD205E455")
+    private val RX_CHARACTERISTIC_UUID = UUID.fromString("49535343-8841-43F4-A8D4-ECBE34729BB3")
+    private val TX_CHARACTERISTIC_UUID = UUID.fromString("49535343-1E4D-4BD9-BA61-23C647249616")
+
+    private val BRRBOX_MAC = "04:91:62:94:C6:F5"
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         if (permissions.all { it.value }) {
-            statusText.value = "Ready to connect"
+            addLog("Ready to connect.")
         } else {
-            statusText.value = "Permissions required"
+            addLog("Permissions required")
+        }
+    }
+
+    private fun addLog(message: String) {
+        val currentLog = debugLog.value.toMutableList()
+        currentLog.add(0, message) // Add to beginning
+        if (currentLog.size > 50) { // Keep last 20 logs
+            currentLog.removeAt(currentLog.lastIndex)
+        }
+        debugLog.value = currentLog
+        android.util.Log.d("BRRBOX", message)
+    }
+    private val scanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult?) {
+            if (ActivityCompat.checkSelfPermission(
+                    this@MainActivity,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+
+            result?.device?.let { device ->
+                val deviceName = device.name ?: "Unknown"
+                val deviceAddress = device.address
+                val rssi = result.rssi
+
+                // ✔ Only log NEW MAC addresses
+                if (!discoveredDevices.contains(deviceAddress)) {
+                    discoveredDevices.add(deviceAddress)
+                    addLog("Found: $deviceName ($deviceAddress) RSSI: $rssi dBm")
+                }
+
+                // Existing logic: connect immediately if it's BRRBOX
+                if (device.address.equals(BRRBOX_MAC, ignoreCase = true)) {
+                    bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
+                    addLog("Connecting to BRRBOX...")
+                    bluetoothGatt = device.connectGatt(this@MainActivity, false, gattCallback)
+                }
+            }
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            addLog("Scan failed with error code: $errorCode")
         }
     }
 
@@ -85,7 +137,7 @@ class MainActivity : ComponentActivity() {
         override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    statusText.value = "Connected - Discovering services..."
+                    addLog("Connected! Discovering services...")
                     if (ActivityCompat.checkSelfPermission(
                             this@MainActivity,
                             Manifest.permission.BLUETOOTH_CONNECT
@@ -95,16 +147,26 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    statusText.value = "Disconnected"
                     isConnected.value = false
+                    addLog("Disconnected from device")
                 }
             }
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                statusText.value = "Connected - Ready to send"
+                addLog("Connected to device, ready to send messages.")
                 isConnected.value = true
+
+                // Log all discovered services and characteristics
+                gatt?.services?.forEach { service ->
+                    addLog("Service: ${service.uuid}")
+                    service.characteristics.forEach { char ->
+                        addLog("  Char: ${char.uuid}")
+                    }
+                }
+            } else {
+                addLog("Service discovery failed: $status")
             }
         }
 
@@ -114,20 +176,24 @@ class MainActivity : ComponentActivity() {
             status: Int
         ) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                statusText.value = "Message received!"
+                addLog("Command sent successfully")
             } else {
-                statusText.value = "Send failed"
+                addLog("Command failed with status: $status")
             }
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun CommandScreen(modifier: Modifier = Modifier) {
         Scaffold (
             modifier = Modifier.fillMaxSize(),
         ) { contentPadding ->
             Column(
-                modifier = Modifier.padding(contentPadding).fillMaxSize(),
+                modifier = Modifier
+                    .padding(contentPadding)
+                    .fillMaxSize()
+                    .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -192,7 +258,10 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier.fillMaxSize()
         ) { contentPadding ->
             Column(
-                modifier = Modifier.padding(contentPadding).fillMaxSize(),
+                modifier = Modifier
+                    .padding(contentPadding)
+                    .fillMaxSize()
+                    .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -200,16 +269,6 @@ class MainActivity : ComponentActivity() {
                     "Bluetooth Pairing",
                     fontSize = 36.sp,
                     fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    statusText.value,
-                    fontSize = 18.sp,
-                    color = when {
-                        statusText.value.contains("Connected") -> MaterialTheme.colorScheme.primary
-                        statusText.value.contains("failed") -> MaterialTheme.colorScheme.error
-                        else -> MaterialTheme.colorScheme.onSurface
-                    }
                 )
 
                 Spacer(modifier = Modifier.height(48.dp))
@@ -220,14 +279,6 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("Connect to BRRBOX")
-                }
-
-                Button(
-                    onClick = { debugConnect() },
-                    enabled = !isConnected.value,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Connect to BRRBOX Debug")
                 }
 
                 Button(
@@ -265,11 +316,82 @@ class MainActivity : ComponentActivity() {
     }
     @Composable
     fun DebugScreen(modifier: Modifier = Modifier) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text("To be implemented!")
+        Scaffold(
+            modifier = Modifier.fillMaxSize()
+        ) { contentPadding ->
+            Column(
+                modifier = Modifier
+                    .padding(contentPadding)
+                    .fillMaxSize()
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    "Debug",
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                Button(
+                    onClick = { debugConnect() },
+                    enabled = !isConnected.value,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Connect to BRRBOX Debug")
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    "Debug Logs",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.medium
+                ) {
+                    androidx.compose.foundation.lazy.LazyColumn(
+                        modifier = Modifier.padding(8.dp),
+                        reverseLayout = false
+                    ) {
+                        items(debugLog.value.size) { index ->
+                            Text(
+                                debugLog.value[index],
+                                fontSize = 12.sp,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                            if (index < debugLog.value.size - 1) {
+                                HorizontalDivider(
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        debugLog.value = mutableListOf()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Clear Log")
+                }
+            }
         }
     }
 
@@ -286,6 +408,7 @@ class MainActivity : ComponentActivity() {
         DEBUG("debug", "Debug",Icons.Default.Terminal,"Debug Logs"),
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -297,12 +420,13 @@ class MainActivity : ComponentActivity() {
         
         setContent {
             MaterialTheme {
-                mainScreen()
+                MainScreen()
             }
         }
         
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun AppNavHost(
         navController: NavHostController,
@@ -327,8 +451,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
-    fun mainScreen(modifier: Modifier = Modifier) {
+    fun MainScreen(modifier: Modifier = Modifier) {
         val navController = rememberNavController()
         val startDestination = Destination.COMMAND
         var selectedDestination by rememberSaveable {mutableIntStateOf(startDestination.ordinal)}
@@ -360,51 +485,53 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.S)
     fun requestBluetoothPermissions() {
         val permissions = mutableListOf(
             Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_CONNECT
+            Manifest.permission.BLUETOOTH_CONNECT,
+            Manifest.permission.ACCESS_FINE_LOCATION
         )
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            requestPermissionLauncher.launch(permissions.toTypedArray())
-        }
+        requestPermissionLauncher.launch(permissions.toTypedArray())
     }
 
     fun connectToBRRBOX() {
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.BLUETOOTH_CONNECT
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            statusText.value = "Bluetooth permission required"
+        discoveredDevices.clear()
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            addLog("Bluetooth permission is required.")
             return
         }
 
-        statusText.value = "Scanning for BRRBOX..."
-
-        // Find device by name "BRRBOX" or address
-        val pairedDevices = bluetoothAdapter?.bondedDevices
-        val brrboxDevice = pairedDevices?.find { device ->
-            device.name?.contains("BRRBOX", ignoreCase = true) == true ||
-                    device.name?.contains("RN4870", ignoreCase = true) == true  // Microchip module name
+        // Try bonded first
+        bluetoothAdapter?.bondedDevices?.forEach { device ->
+            if (device.address.equals(BRRBOX_MAC, ignoreCase = true)) {
+                addLog("Found bonded BRRBOX - Connecting...")
+                bluetoothGatt = device.connectGatt(this, false, gattCallback)
+                return
+            }
         }
 
-        if (brrboxDevice != null) {
-            statusText.value = "Connecting..."
-            bluetoothGatt = brrboxDevice.connectGatt(this, false, gattCallback)
-        } else {
-            statusText.value = "BRRBOX not found - Please pair device first"
-        }
+        // Fall back to scanning
+        addLog("Scanning for devices...")
+        val scanSettings = android.bluetooth.le.ScanSettings.Builder()
+            .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+        bluetoothAdapter?.bluetoothLeScanner?.startScan(null, scanSettings, scanCallback)
+
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+                bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+            }
+            if (!isConnected.value) {
+                addLog("BRRBOX not found")
+            }
+        }, 10000)
     }
 
     fun debugConnect() {
         isConnected.value = !isConnected.value
-        statusText.value = if (isConnected.value) {
-            "Debug Mode - Connected (Fake)"
-        } else {
-            "Debug Mode - Disconnected"
-        }
+        addLog(if (isConnected.value) "Debug Mode - Connected (Fake)" else "Debug Mode - Disconnected")
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -417,10 +544,10 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        statusText.value = "Sending message..."
+        addLog("Sending message...")
 
         val service = bluetoothGatt?.getService(SERVICE_UUID)
-        val characteristic = service?.getCharacteristic(CHARACTERISTIC_UUID)
+        val characteristic = service?.getCharacteristic(RX_CHARACTERISTIC_UUID)
 
         if (characteristic != null) {
             bluetoothGatt?.writeCharacteristic(
@@ -429,7 +556,7 @@ class MainActivity : ComponentActivity() {
                 BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             )
         } else {
-            statusText.value = "Error: Service not found"
+            addLog("Error: Service not found")
         }
     }
 
@@ -451,7 +578,7 @@ class MainActivity : ComponentActivity() {
             } else {
                 tempValue
             }
-            return String.format("%.1f", celsius)
+            return String.format(Locale.US,"%.1f", celsius)
         }
 
         Dialog(
@@ -526,7 +653,7 @@ class MainActivity : ComponentActivity() {
                                                         } else {
                                                             tempValue * 9f / 5f + 32
                                                         }
-                                                        temperature = String.format("%.1f", converted)
+                                                        temperature = String.format(Locale.US,"%.1f", converted)
                                                     }
                                                     onOptionSelected(option)
                                                 }
@@ -592,11 +719,12 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        addLog("Disconnecting...")
         bluetoothGatt?.disconnect()
         bluetoothGatt?.close()
         bluetoothGatt = null
         isConnected.value = false
-        statusText.value = "Disconnected"
+        addLog("Disconnected")
     }
 
     override fun onDestroy() {
