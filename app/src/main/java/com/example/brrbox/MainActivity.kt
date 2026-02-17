@@ -302,7 +302,7 @@ class MainActivity : ComponentActivity() {
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            Text("To be implemented!")
+            Text("We out here")
         }
     }
     @Composable
