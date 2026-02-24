@@ -87,7 +87,7 @@ class MainActivity : ComponentActivity() {
     // BLE UUIDs - need to update
     private val SERVICE_UUID = UUID.fromString("49535343-FE7D-4AE5-8FA9-9FAFD205E455")
     private val RX_CHARACTERISTIC_UUID = UUID.fromString("49535343-1E4D-4BD9-BA61-07C6435A5E4F")
-    private val TX_CHARACTERISTIC_UUID = UUID.fromString("449535343-8841-43F4-A8D4-ECBE34729BB3")
+    private val TX_CHARACTERISTIC_UUID = UUID.fromString("49535343-8841-43F4-A8D4-ECBE34729BB3")
 
     private val BRRBOX_MAC = "40:84:32:01:3B:28"
 
