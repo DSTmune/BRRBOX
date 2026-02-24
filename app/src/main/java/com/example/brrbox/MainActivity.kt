@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -40,7 +41,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
     private val discoveredDevices = mutableSetOf<String>()
 
     private var showTemperatureDialog = mutableStateOf(false)
+    private var showLoggingDialog = mutableStateOf(false)
 
     // BLE UUIDs - need to update
     private val SERVICE_UUID = UUID.fromString("49535343-FE7D-4AE5-8FA9-9FAFD205E455")
@@ -417,8 +418,9 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Button(
-                        onClick = { sendCommand("D") },
-                        enabled = isConnected.value,
+                        onClick = {
+                            showLoggingDialog.value = true
+                                  },
                         modifier = Modifier.weight(12f)
                     ) {
                         Text("Get Logging Data")
@@ -433,6 +435,22 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+        if (showLoggingDialog.value) {
+            GlobalAlertDialog(
+                {
+                    showLoggingDialog.value = false
+                },
+                {
+                    showLoggingDialog.value = false
+                    sendCommand("D")
+                },
+                "Get Logs",
+                "Where do you want to retrieve logging data?",
+                "BRRBOX",
+                "Internal Storage",
+                Icons.Default.FileOpen
+            )
         }
     }
     @Composable
@@ -909,6 +927,50 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    @Composable
+    fun GlobalAlertDialog(
+        onDismissRequest: () -> Unit,
+        onConfirmation: () -> Unit,
+        dialogTitle: String,
+        dialogText: String,
+        confirmText: String,
+        dismissText: String,
+        icon: ImageVector,
+    ) {
+        AlertDialog(
+            icon = {
+                Icon(icon, contentDescription = "Example Icon")
+            },
+            title = {
+                Text(text = dialogTitle)
+            },
+            text = {
+                Text(text = dialogText)
+            },
+            onDismissRequest = {
+                onDismissRequest()
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onConfirmation()
+                    }
+                ) {
+                    Text(confirmText)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        onDismissRequest()
+                    }
+                ) {
+                    Text(dismissText)
+                }
+            }
+        )
     }
 
     fun disconnect() {
