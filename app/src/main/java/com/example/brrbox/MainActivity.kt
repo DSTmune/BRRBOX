@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.pm.PackageManager
@@ -18,6 +19,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.widget.Toast
+import androidx.annotation.RequiresPermission
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -83,11 +86,14 @@ class MainActivity : ComponentActivity() {
 
     private var showTemperatureDialog = mutableStateOf(false)
     private var showLoggingDialog = mutableStateOf(false)
+    private var receivingLoggingData = mutableStateOf(false)
+
+    private var logEntries = mutableStateListOf<Entry>()
 
     // BLE UUIDs - need to update
     private val SERVICE_UUID = UUID.fromString("49535343-FE7D-4AE5-8FA9-9FAFD205E455")
-    private val RX_CHARACTERISTIC_UUID = UUID.fromString("49535343-1E4D-4BD9-BA61-07C6435A5E4F")
-    private val TX_CHARACTERISTIC_UUID = UUID.fromString("49535343-8841-43F4-A8D4-ECBE34729BB3")
+    private val RX_CHARACTERISTIC_UUID = UUID.fromString("49535343-8841-43F4-A8D4-ECBE34729BB3")
+    private val TX_CHARACTERISTIC_UUID = UUID.fromString("49535343-1E4D-4BD9-BA61-23C647249616")
 
     private val BRRBOX_MAC = "40:84:32:01:3B:28"
 
@@ -165,6 +171,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 addLog("Connected to device, ready to send messages.")
@@ -177,6 +184,30 @@ class MainActivity : ComponentActivity() {
                         addLog("  Char: ${char.uuid}")
                     }
                 }
+
+                val service = gatt?.getService(SERVICE_UUID)
+                val txChar = service?.getCharacteristic(TX_CHARACTERISTIC_UUID)
+
+                if (txChar != null) {
+                    gatt.setCharacteristicNotification(txChar, true)
+
+                    // Step 2: tell the BRRBOX to actually start sending
+                    val descriptor = txChar.getDescriptor(
+                        UUID.fromString("00002902-0000-1000-8000-00805f9b34fb") // standard CCCD UUID
+                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        @Suppress("DEPRECATION")
+                        gatt.writeDescriptor(descriptor)
+                    }
+                    addLog("Subscribed to TX notifications")
+                } else {
+                    addLog("TX characteristic not found!")
+                }
+
             } else {
                 addLog("Service discovery failed: $status")
             }
@@ -971,6 +1002,40 @@ class MainActivity : ComponentActivity() {
                 }
             }
         )
+    }
+
+    fun onCharacteristicChanged(
+        gatt: BluetoothGatt,
+        characteristic: BluetoothGattCharacteristic,
+        value: ByteArray
+    ) {
+        val message = value.toString(Charsets.UTF_8)
+        addLog("From BRRBOX: $message")
+
+
+
+        if (message == "OK") {
+            runOnUiThread {
+                Toast.makeText(this, "Message received!", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        if (message == "LStart") {
+            receivingLoggingData.value = true
+            logEntries.clear()
+
+        }
+
+        if (receivingLoggingData.value && message.matches(Regex("T\\d{2}:\\d{2}:\\d{2},-?\\d+\\.?\\d*"))) {
+            val (time, temp) = message.removePrefix("T").split(",")
+            val hours = time.split(":").let { it[0].toFloat() + it[1].toFloat() / 60 }
+            val temperature = temp.toFloat()
+            logEntries.add(Entry(hours, temperature))
+        }
+
+        if (message == "LEnd") {
+            receivingLoggingData.value = false
+        }
     }
 
     fun disconnect() {
