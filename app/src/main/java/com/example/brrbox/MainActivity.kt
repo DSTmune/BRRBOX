@@ -86,6 +86,7 @@ import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private var bluetoothAdapter: BluetoothAdapter? = null
@@ -443,13 +444,10 @@ class MainActivity : ComponentActivity() {
                                 gridColor = android.graphics.Color.LTGRAY
                                 valueFormatter = object : com.github.mikephil.charting.formatter.ValueFormatter() {
                                     override fun getFormattedValue(value: Float): String {
-                                        val h = value.toInt() % 24
-                                        return when {
-                                            h == 0  -> "12 AM"
-                                            h < 12  -> "$h AM"
-                                            h == 12 -> "12 PM"
-                                            else    -> "${h - 12} PM"
-                                        }
+                                        val totalMinutes = (value * 60).roundToInt()
+                                        val h = totalMinutes / 60
+                                        val m = totalMinutes % 60
+                                        return if (h > 0) "${h}h ${m}m" else "${m}m"
                                     }
                                 }
                             }
@@ -459,9 +457,11 @@ class MainActivity : ComponentActivity() {
                                 gridColor = android.graphics.Color.LTGRAY
                                 axisMinimum = 10f
                                 axisMaximum = 32f
-                                granularity = 5f
+                                granularity = 0.1f
+                                isGranularityEnabled = true
                                 valueFormatter = object : com.github.mikephil.charting.formatter.ValueFormatter() {
-                                    override fun getFormattedValue(value: Float) = "${value.toInt()}°C"
+                                    override fun getFormattedValue(value: Float) =
+                                        if (value % 1f == 0f) "${value.toInt()}°C" else "${"%.1f".format(value)}°C"
                                 }
                             }
 
@@ -474,6 +474,26 @@ class MainActivity : ComponentActivity() {
                             setPinchZoom(true)
                             setExtraOffsets(8f, 8f, 8f, 8f)
                             animateX(1000)
+
+                            onChartGestureListener = object : com.github.mikephil.charting.listener.OnChartGestureListener {
+                                override fun onChartGestureEnd(me: android.view.MotionEvent?, lastPerformedGesture: com.github.mikephil.charting.listener.ChartTouchListener.ChartGesture?) {
+                                    updateXAxisGranularity(this@apply)
+                                    updateYAxisGranularity(this@apply)
+                                }
+                                override fun onChartScale(me: android.view.MotionEvent?, scaleX: Float, scaleY: Float) {
+                                    updateXAxisGranularity(this@apply)
+                                    updateYAxisGranularity(this@apply)
+                                }
+                                override fun onChartTranslate(me: android.view.MotionEvent?, dX: Float, dY: Float) {
+                                    updateXAxisGranularity(this@apply)
+                                    updateYAxisGranularity(this@apply)
+                                }
+                                override fun onChartGestureStart(me: android.view.MotionEvent?, lastPerformedGesture: com.github.mikephil.charting.listener.ChartTouchListener.ChartGesture?) {}
+                                override fun onChartLongPressed(me: android.view.MotionEvent?) {}
+                                override fun onChartDoubleTapped(me: android.view.MotionEvent?) {}
+                                override fun onChartSingleTapped(me: android.view.MotionEvent?) {}
+                                override fun onChartFling(me1: android.view.MotionEvent?, me2: android.view.MotionEvent?, velocityX: Float, velocityY: Float) {}
+                            }
                         }
                     },
                     update = { chart ->
@@ -497,7 +517,7 @@ class MainActivity : ComponentActivity() {
 
                             chart.axisLeft.apply {
                                 axisMinimum = minOf(minTemp - 10f, 0f)
-                                axisMaximum = maxOf(maxTemp + 10f, 60f)
+                                axisMaximum = maxOf(maxTemp + 10f, 30f)
                             }
 
                             chart.xAxis.apply {
@@ -517,6 +537,8 @@ class MainActivity : ComponentActivity() {
                         chart.data = LineData(dataSet)
                         chart.notifyDataSetChanged()
                         chart.invalidate()
+                        updateXAxisGranularity(chart)
+                        updateYAxisGranularity(chart)
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1310,6 +1332,41 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    private fun updateXAxisGranularity(chart: LineChart) {
+        val visibleRange = chart.visibleXRange // in hours
+        val granularityHours = when {
+            visibleRange <= 0.1f  -> 1f / 60f
+            visibleRange <= 0.25f -> 5f / 60f
+            visibleRange <= 0.5f  -> 10f / 60f
+            visibleRange <= 1f    -> 15f / 60f
+            visibleRange <= 2f    -> 30f / 60f
+            visibleRange <= 6f    -> 1f
+            visibleRange <= 12f   -> 2f
+            else                  -> 4f
+        }
+        chart.xAxis.granularity = granularityHours
+        chart.xAxis.setLabelCount(6, false)
+        chart.invalidate()
+    }
+
+    private fun updateYAxisGranularity(chart: LineChart) {
+        val transformer = chart.getTransformer(com.github.mikephil.charting.components.YAxis.AxisDependency.LEFT)
+        val bounds = chart.contentRect
+        val topLeft = transformer.getValuesByTouchPoint(bounds.left, bounds.top)
+        val bottomLeft = transformer.getValuesByTouchPoint(bounds.left, bounds.bottom)
+        val visibleYRange = topLeft.y.toFloat() - bottomLeft.y.toFloat()
+
+        chart.axisLeft.granularity = when {
+            visibleYRange <= 1f  -> 0.1f
+            visibleYRange <= 5f  -> 0.5f
+            visibleYRange <= 10f -> 1f
+            visibleYRange <= 20f -> 2f
+            visibleYRange <= 40f -> 5f
+            else                 -> 10f
+        }
+        chart.invalidate()
     }
 
     fun disconnect() {
