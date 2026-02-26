@@ -21,6 +21,12 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.widget.Toast
 import androidx.annotation.RequiresPermission
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -36,6 +42,7 @@ import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
@@ -44,6 +51,10 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -54,6 +65,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -89,6 +101,7 @@ class MainActivity : ComponentActivity() {
     private var showLoggingDialog = mutableStateOf(false)
     private var receivingLoggingData = mutableStateOf(false)
 
+    private var currentTempCelsius = mutableStateOf(0f)
     private var logEntries = mutableStateListOf<Entry>()
 
     // BLE UUIDs - need to update
@@ -266,6 +279,10 @@ class MainActivity : ComponentActivity() {
                 val temperature = temp.toFloat()
                 logEntries.add(Entry(hours, temperature))
             }
+
+            if (message.startsWith("M")) {
+                currentTempCelsius.value = message.removePrefix("M").toFloatOrNull() ?: currentTempCelsius.value
+            }
         }
     }
 
@@ -319,13 +336,6 @@ class MainActivity : ComponentActivity() {
                     Text("Change Temperature")
                 }
 
-                Button(
-                    onClick = { sendCommand("D") },
-                    enabled = isConnected.value,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Get Logging Data")
-                }
             }
         }
         if (showTemperatureDialog.value) {
@@ -336,6 +346,43 @@ class MainActivity : ComponentActivity() {
                     showTemperatureDialog.value = false
                 }
             )
+        }
+    }    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    @Composable
+    fun MonitorScreen(modifier: Modifier = Modifier) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+        ) { contentPadding ->
+            Column(
+                modifier = Modifier
+                    .padding(contentPadding)
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    "Current Temperature",
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(32.dp))
+                Button(
+                    onClick = { sendCommand("M") },
+                    enabled = isConnected.value,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Get Live Temperature")
+                }
+                Spacer(modifier = Modifier.height(32.dp))
+                ThermometerGraphic(
+                    temperatureCelsius = currentTempCelsius.value,
+                    minTemp = -20f,
+                    maxTemp = 50f,
+                    useFahrenheit = true,
+                    thermometerHeight = 350.dp  // or however big you want
+                )
+            }
         }
     }
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -719,8 +766,9 @@ class MainActivity : ComponentActivity() {
         val contentDescription: String
     ){
         COMMAND("sendcommand", "Control", Icons.Default.AcUnit,"Control the Device"),
-        BLUETOOTH("bluetooth", "Bluetooth",Icons.Default.Bluetooth,"Bluetooth Connection"),
+        MONITOR("monitor", "Temp",Icons.Default.Thermostat,"View Current Device Temperature"),
         TEMPDATA("data", "Logs",Icons.Default.Archive,"View Temperature Logs"),
+        BLUETOOTH("bluetooth", "Bluetooth",Icons.Default.Bluetooth,"Bluetooth Connection"),
         LOGIN("login", "Account",Icons.Default.AccountCircle,"Login to User Account"),
         DEBUG("debug", "Debug",Icons.Default.Terminal,"Debug Logs"),
     }
@@ -758,8 +806,9 @@ class MainActivity : ComponentActivity() {
                 composable(destination.route) {
                     when (destination) {
                         Destination.COMMAND -> CommandScreen()
-                        Destination.BLUETOOTH -> BluetoothScreen()
+                        Destination.MONITOR -> MonitorScreen()
                         Destination.TEMPDATA -> TempDataScreen()
+                        Destination.BLUETOOTH -> BluetoothScreen()
                         Destination.LOGIN -> LoginScreen()
                         Destination.DEBUG -> DebugScreen()
                     }
@@ -1080,6 +1129,137 @@ class MainActivity : ComponentActivity() {
     fun simpleAlert(message: String){
         runOnUiThread {
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    @Composable
+    fun ThermometerGraphic(
+        temperatureCelsius: Float,
+        minTemp: Float = -20f,
+        maxTemp: Float = 50f,
+        useFahrenheit: Boolean = false,
+        thermometerHeight: Dp = 200.dp,
+        modifier: Modifier = Modifier
+    ) {
+        val thermometerWidth = thermometerHeight / 4
+        val displayTemp = if (useFahrenheit) temperatureCelsius * 9f / 5f + 32f else temperatureCelsius
+        val secondaryTemp = if (useFahrenheit) temperatureCelsius else temperatureCelsius * 9f / 5f + 32f
+        val primaryUnit = if (useFahrenheit) "°F" else "°C"
+        val secondaryUnit = if (useFahrenheit) "°C" else "°F"
+        val secondaryValue = if (useFahrenheit) temperatureCelsius else temperatureCelsius * 9f / 5f + 32f
+
+        val fraction = ((temperatureCelsius - minTemp) / (maxTemp - minTemp)).coerceIn(0f, 1f)
+        val animatedFraction by animateFloatAsState(
+            targetValue = fraction,
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioMediumBouncy,
+                stiffness = Spring.StiffnessLow
+            ),
+            label = "thermometer"
+        )
+
+        val color by animateColorAsState(
+            targetValue = when {
+                temperatureCelsius < 0f  -> Color(0xFF4FC3F7)
+                temperatureCelsius < 15f -> Color(0xFF81C784)
+                temperatureCelsius < 28f -> Color(0xFFFFB74D)
+                else                     -> Color(0xFFE53935)
+            },
+            animationSpec = tween(600),
+            label = "thermometerColor"
+        )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = modifier
+        ) {
+            // Thermometer stem + bulb
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Canvas(
+                    modifier = Modifier
+                        .width(thermometerWidth)
+                        .height(thermometerHeight)
+                ) {
+                    val stemWidth = size.width * 0.28f
+                    val bulbRadius = size.width * 0.42f
+                    val stemLeft = (size.width - stemWidth) / 2f
+                    val stemRight = (size.width + stemWidth) / 2f
+                    val bulbCenterY = size.height - bulbRadius
+                    val stemBottom = bulbCenterY - bulbRadius * 0.6f
+                    val stemTop = 12f
+
+                    drawRoundRect(
+                        color = Color.LightGray.copy(alpha = 0.4f),
+                        topLeft = Offset(stemLeft, stemTop),
+                        size = Size(stemWidth, stemBottom - stemTop),
+                        cornerRadius = CornerRadius(stemWidth / 2f)
+                    )
+
+                    val fillHeight = (stemBottom - stemTop) * animatedFraction
+                    val fillTop = stemBottom - fillHeight
+                    drawRoundRect(
+                        color = color,
+                        topLeft = Offset(stemLeft, fillTop),
+                        size = Size(stemWidth, fillHeight + stemWidth / 2f),
+                        cornerRadius = CornerRadius(stemWidth / 2f)
+                    )
+
+                    for (i in 0..7) {
+                        val tickY = stemBottom - (stemBottom - stemTop) * (i.toFloat() / 7)
+                        val isLong = i % 2 == 0
+                        drawLine(
+                            color = Color.Gray.copy(alpha = 0.5f),
+                            start = Offset(stemRight + 4f, tickY),
+                            end = Offset(stemRight + if (isLong) 16f else 10f, tickY),
+                            strokeWidth = if (isLong) 2f else 1f
+                        )
+                    }
+
+                    drawCircle(
+                        color = Color.LightGray.copy(alpha = 0.4f),
+                        radius = bulbRadius,
+                        center = Offset(size.width / 2f, bulbCenterY)
+                    )
+                    drawCircle(
+                        color = color,
+                        radius = bulbRadius * 0.85f,
+                        center = Offset(size.width / 2f, bulbCenterY)
+                    )
+                    drawCircle(
+                        color = Color.White.copy(alpha = 0.35f),
+                        radius = bulbRadius * 0.3f,
+                        center = Offset(size.width / 2f - bulbRadius * 0.25f, bulbCenterY - bulbRadius * 0.25f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.width(thermometerWidth),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("${minTemp.toInt()}°", fontSize = 9.sp, color = Color.Gray)
+                    Text("${maxTemp.toInt()}°", fontSize = 9.sp, color = Color.Gray)
+                }
+            }
+
+            Spacer(modifier = Modifier.width(24.dp))
+
+            // Labels to the right, vertically centered
+            Column {
+                Text(
+                    text = "${String.format(Locale.US, "%.1f", displayTemp)}$primaryUnit",
+                    fontSize = (thermometerHeight.value / 6).sp,   // e.g. 350dp → ~58sp
+                    fontWeight = FontWeight.Bold,
+                    color = color
+                )
+                Text(
+                    text = "${String.format(Locale.US, "%.1f", secondaryValue)}$secondaryUnit",
+                    fontSize = (thermometerHeight.value / 14).sp,  // e.g. 350dp → ~25sp
+                    color = color.copy(alpha = 0.7f)
+                )
+            }
         }
     }
 
