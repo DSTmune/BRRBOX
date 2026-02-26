@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
 
     // Status states
     private var isConnected = mutableStateOf(false)
+    private var isConnecting = mutableStateOf(false)
     private var debugLog = mutableStateOf(mutableListOf<String>())
     private val discoveredDevices = mutableSetOf<String>()
 
@@ -165,6 +166,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
+                    isConnecting.value = false
                     isConnected.value = false
                     addLog("Disconnected from device")
                 }
@@ -175,6 +177,8 @@ class MainActivity : ComponentActivity() {
         override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 addLog("Connected to device, ready to send messages.")
+                simpleAlert("Connected!")
+                isConnecting.value = false
                 isConnected.value = true
 
                 // Log all discovered services and characteristics
@@ -222,6 +226,45 @@ class MainActivity : ComponentActivity() {
                 addLog("Command sent successfully")
             } else {
                 addLog("Command failed with status: $status")
+            }
+        }
+
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
+        ) {
+            val message = value.toString(Charsets.UTF_8)
+            addLog("From BRRBOX: $message")
+
+            // Handle single-byte status codes
+            if (value.size == 1) {
+                when (value[0].toInt() and 0xFF) {
+                    0x00 -> simpleAlert("Message received!")
+                    0x01 -> simpleAlert("Connected to BRRBOX!")
+                    0x02 -> simpleAlert("Device locked successfully.")
+                    0x03 -> simpleAlert("Device unlocked successfully.")
+                    0x04 -> simpleAlert("Temperature set successfully.")
+                    0x10 -> simpleAlert("Warning: Low battery!")
+                    0x11 -> {
+                        simpleAlert("Receiving log data...")
+                        receivingLoggingData.value = true
+                        logEntries.clear()
+                    }
+                    0x12 -> {
+                        receivingLoggingData.value = false
+                    }
+                    0xE0 -> simpleAlert("Error received from BRRBOX.")
+                    else -> addLog("Unknown status code: 0x${value[0].toInt().and(0xFF).toString(16).uppercase()}")
+                }
+                return
+            }
+
+            if (receivingLoggingData.value && message.matches(Regex("T\\d{2}:\\d{2}:\\d{2},-?\\d+\\.?\\d*"))) {
+                val (time, temp) = message.removePrefix("T").split(",")
+                val hours = time.split(":").let { it[0].toFloat() + it[1].toFloat() / 60 }
+                val temperature = temp.toFloat()
+                logEntries.add(Entry(hours, temperature))
             }
         }
     }
@@ -295,54 +338,10 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
-    @Composable
-    fun BluetoothScreen(modifier: Modifier = Modifier) {
-        Scaffold (
-            modifier = Modifier.fillMaxSize()
-        ) { contentPadding ->
-            Column(
-                modifier = Modifier
-                    .padding(contentPadding)
-                    .fillMaxSize()
-                    .padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(
-                    "Bluetooth Pairing",
-                    fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Spacer(modifier = Modifier.height(48.dp))
-
-                Button(
-                    onClick = { connectToBRRBOX() },
-                    enabled = !isConnected.value,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Connect to BRRBOX")
-                }
-
-                Button(
-                    onClick = { disconnect() },
-                    enabled = isConnected.value,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text("Disconnect from BRRBOX")
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-        }
-    }
-
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun TempDataScreen(modifier: Modifier = Modifier) {
+        val entries = logEntries.toList()
         Scaffold(
             modifier = Modifier.fillMaxSize()
         ) { contentPadding ->
@@ -366,34 +365,8 @@ class MainActivity : ComponentActivity() {
 
                 AndroidView(
                     factory = { context ->
-                        val dummyData = listOf(
-                            Entry(0f, 14.2f), Entry(1f, 13.8f), Entry(2f, 13.1f),
-                            Entry(3f, 12.4f), Entry(4f, 12.9f), Entry(5f, 14.0f),
-                            Entry(6f, 16.3f), Entry(7f, 18.7f), Entry(8f, 21.0f),
-                            Entry(9f, 23.4f), Entry(10f, 25.1f), Entry(11f, 26.8f),
-                            Entry(12f, 27.9f), Entry(13f, 27.3f), Entry(14f, 26.0f),
-                            Entry(15f, 24.2f), Entry(16f, 22.0f), Entry(17f, 20.1f),
-                            Entry(18f, 18.5f), Entry(19f, 17.2f), Entry(20f, 16.0f),
-                            Entry(21f, 15.1f), Entry(22f, 14.8f), Entry(23f, 14.4f)
-                        )
-
-                        val dataSet = LineDataSet(dummyData, "Temperature (°C)").apply {
-                            color = "#E84040".toColorInt()
-                            setCircleColor("#E84040".toColorInt())
-                            circleRadius = 3f
-                            circleHoleRadius = 1.5f
-                            circleHoleColor = android.graphics.Color.WHITE
-                            lineWidth = 2f
-                            setDrawValues(false)
-                            setDrawFilled(true)
-                            fillColor = "#E84040".toColorInt()
-                            fillAlpha = 40
-                            mode = LineDataSet.Mode.CUBIC_BEZIER
-                        }
 
                         LineChart(context).apply {
-                            data = LineData(dataSet)
-
                             xAxis.apply {
                                 position = com.github.mikephil.charting.components.XAxis.XAxisPosition.BOTTOM
                                 granularity = 1f
@@ -435,6 +408,24 @@ class MainActivity : ComponentActivity() {
                             animateX(1000)
                         }
                     },
+                    update = { chart ->
+                        val dataSet = LineDataSet(entries, "Temperature (°C)").apply {
+                        color = "#1C86FF".toColorInt()
+                        setCircleColor("#1C86FF".toColorInt())
+                        circleRadius = 3f
+                        circleHoleRadius = 1.5f
+                        circleHoleColor = android.graphics.Color.WHITE
+                        lineWidth = 2f
+                        setDrawValues(false)
+                        setDrawFilled(true)
+                        fillColor = "#1C86FF".toColorInt()
+                        fillAlpha = 40
+                        mode = LineDataSet.Mode.CUBIC_BEZIER
+                        }
+                        chart.data = LineData(dataSet)
+                        chart.notifyDataSetChanged()
+                        chart.invalidate()
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(280.dp)
@@ -474,7 +465,22 @@ class MainActivity : ComponentActivity() {
                 },
                 {
                     showLoggingDialog.value = false
-                    sendCommand("D")
+                    if (bluetoothGatt == null && isConnected.value) {
+                        // debug case with fake data
+                        logEntries.clear()
+
+                        val intervalsPerDay = 24 * 6
+
+                        repeat(intervalsPerDay) { index ->
+                            val minutes = index * 10
+                            val xValue = minutes / 60f
+                            val yValue = (15f + Math.random() * 10).toFloat()
+
+                            logEntries.add(Entry(xValue, yValue))
+                        }
+                    } else {
+                        sendCommand("D")
+                    }
                 },
                 "Get Logs",
                 "Where do you want to retrieve logging data?",
@@ -482,6 +488,60 @@ class MainActivity : ComponentActivity() {
                 "Internal Storage",
                 Icons.Default.FileOpen
             )
+        }
+    }
+    @Composable
+    fun BluetoothScreen(modifier: Modifier = Modifier) {
+        Scaffold (
+            modifier = Modifier.fillMaxSize()
+        ) { contentPadding ->
+            Column(
+                modifier = Modifier
+                    .padding(contentPadding)
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    "Bluetooth Pairing",
+                    fontSize = 36.sp,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(48.dp))
+
+                Button(
+                    onClick = { connectToBRRBOX() },
+                    enabled = !isConnected.value && !isConnecting.value,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isConnecting.value) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Connecting...")
+                    } else {
+                        Text("Connect to BRRBOX")
+                    }
+                }
+
+                Button(
+                    onClick = { disconnect() },
+                    enabled = isConnected.value,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Disconnect from BRRBOX")
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+            }
         }
     }
     @Composable
@@ -652,7 +712,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
     enum class Destination(
         val route: String,
         val label: String,
@@ -761,6 +820,8 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        isConnecting.value = true
+
         // Try bonded first
         bluetoothAdapter?.bondedDevices?.forEach { device ->
             if (device.address.equals(BRRBOX_MAC, ignoreCase = true)) {
@@ -771,17 +832,29 @@ class MainActivity : ComponentActivity() {
         }
 
         // Fall back to scanning
+        simpleAlert("Searching...")
         addLog("Scanning for devices...")
         val scanSettings = android.bluetooth.le.ScanSettings.Builder()
             .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
-        bluetoothAdapter?.bluetoothLeScanner?.startScan(null, scanSettings, scanCallback)
+        try {
+            bluetoothAdapter?.bluetoothLeScanner?.startScan(null, scanSettings, scanCallback)
+        } catch (e: SecurityException) {
+            addLog("SecurityException on scan: ${e.message}")
+            simpleAlert("Permission error. Check if location and bluetooth are enabled!")
+            return
+        } catch (e: Exception) {
+            addLog("Scan error: ${e.message}")
+            return
+        }
 
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
                 bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
             }
             if (!isConnected.value) {
+                isConnecting.value = false
+                simpleAlert("BRRBOX not found!")
                 addLog("BRRBOX not found")
             }
         }, 10000)
@@ -1004,37 +1077,9 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    fun onCharacteristicChanged(
-        gatt: BluetoothGatt,
-        characteristic: BluetoothGattCharacteristic,
-        value: ByteArray
-    ) {
-        val message = value.toString(Charsets.UTF_8)
-        addLog("From BRRBOX: $message")
-
-
-
-        if (message == "OK") {
-            runOnUiThread {
-                Toast.makeText(this, "Message received!", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        if (message == "LStart") {
-            receivingLoggingData.value = true
-            logEntries.clear()
-
-        }
-
-        if (receivingLoggingData.value && message.matches(Regex("T\\d{2}:\\d{2}:\\d{2},-?\\d+\\.?\\d*"))) {
-            val (time, temp) = message.removePrefix("T").split(",")
-            val hours = time.split(":").let { it[0].toFloat() + it[1].toFloat() / 60 }
-            val temperature = temp.toFloat()
-            logEntries.add(Entry(hours, temperature))
-        }
-
-        if (message == "LEnd") {
-            receivingLoggingData.value = false
+    fun simpleAlert(message: String){
+        runOnUiThread {
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
         }
     }
 
