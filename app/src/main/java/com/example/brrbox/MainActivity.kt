@@ -91,6 +91,8 @@ class MainActivity : ComponentActivity() {
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var bluetoothGatt: BluetoothGatt? = null
 
+    private val receiveBuffer = StringBuilder()
+
     // Status states
     private var isConnected = mutableStateOf(false)
     private var isConnecting = mutableStateOf(false)
@@ -194,7 +196,6 @@ class MainActivity : ComponentActivity() {
                 isConnecting.value = false
                 isConnected.value = true
 
-                // Log all discovered services and characteristics
                 gatt?.services?.forEach { service ->
                     addLog("Service: ${service.uuid}")
                     service.characteristics.forEach { char ->
@@ -208,9 +209,8 @@ class MainActivity : ComponentActivity() {
                 if (txChar != null) {
                     gatt.setCharacteristicNotification(txChar, true)
 
-                    // Step 2: tell the BRRBOX to actually start sending
                     val descriptor = txChar.getDescriptor(
-                        UUID.fromString("00002902-0000-1000-8000-00805f9b34fb") // standard CCCD UUID
+                        UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
                     )
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                         gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
@@ -247,42 +247,66 @@ class MainActivity : ComponentActivity() {
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray
         ) {
-            val message = value.toString(Charsets.UTF_8)
-            addLog("From BRRBOX: $message")
+            receiveBuffer.append(value.toString(Charsets.UTF_8))
 
-            // Handle single-byte status codes
-            if (value.size == 1) {
-                when (value[0].toInt() and 0xFF) {
-                    0x00 -> simpleAlert("Message received!")
-                    0x01 -> simpleAlert("Connected to BRRBOX!")
-                    0x02 -> simpleAlert("Device locked successfully.")
-                    0x03 -> simpleAlert("Device unlocked successfully.")
-                    0x04 -> simpleAlert("Temperature set successfully.")
-                    0x10 -> simpleAlert("Warning: Low battery!")
-                    0x11 -> {
-                        simpleAlert("Receiving log data...")
-                        receivingLoggingData.value = true
-                        logEntries.clear()
-                    }
-                    0x12 -> {
-                        receivingLoggingData.value = false
-                    }
-                    0xE0 -> simpleAlert("Error received from BRRBOX.")
-                    else -> addLog("Unknown status code: 0x${value[0].toInt().and(0xFF).toString(16).uppercase()}")
+            while (receiveBuffer.contains('\n')) {
+                val newlineIndex = receiveBuffer.indexOf('\n')
+                val line = receiveBuffer.substring(0, newlineIndex).trim()
+                receiveBuffer.delete(0, newlineIndex + 1)
+
+                if (line.isNotEmpty()) {
+                    processMessage(line)
                 }
-                return
             }
+        }
+    }
 
-            if (receivingLoggingData.value && message.matches(Regex("T\\d{2}:\\d{2}:\\d{2},-?\\d+\\.?\\d*"))) {
-                val (time, temp) = message.removePrefix("T").split(",")
-                val hours = time.split(":").let { it[0].toFloat() + it[1].toFloat() / 60 }
-                val temperature = temp.toFloat()
-                logEntries.add(Entry(hours, temperature))
-            }
+    private fun processMessage(message: String) {
+        addLog("From BRRBOX: $message")
 
-            if (message.startsWith("M")) {
-                currentTempCelsius.value = message.removePrefix("M").toFloatOrNull() ?: currentTempCelsius.value
+        val bytes = message.toByteArray(Charsets.UTF_8)
+        if (bytes.size == 1) {
+            when (bytes[0].toInt() and 0xFF) {
+                0x00 -> simpleAlert("Message received!")
+                0x01 -> simpleAlert("Connected to BRRBOX!")
+                0x02 -> simpleAlert("Device locked successfully.")
+                0x03 -> simpleAlert("Device unlocked successfully.")
+                0x04 -> simpleAlert("Temperature set successfully.")
+                0x10 -> simpleAlert("Warning: Low battery!")
+                0x11 -> {
+                    simpleAlert("Receiving log data...")
+                    receivingLoggingData.value = true
+                    logEntries.clear()
+                }
+                0x12 -> {
+                    receivingLoggingData.value = false
+                }
+                0xE0 -> simpleAlert("Error received from BRRBOX.")
+                else -> addLog("Unknown status code: 0x${bytes[0].toInt().and(0xFF).toString(16).uppercase()}")
             }
+            return
+        }
+
+        // temporary, remove after byte status messages are implemented.
+        if (message == "LStart") {
+            simpleAlert("Receiving log data...")
+            receivingLoggingData.value = true
+            logEntries.clear()
+        }
+        if (message == "LEnd") {
+            receivingLoggingData.value = false
+        }
+
+        if (receivingLoggingData.value && message.matches(Regex("T\\d{2}:\\d{2}:\\d{2},-?\\d+\\.?\\d*"))) {
+            val (time, temp) = message.removePrefix("T").split(",")
+            val parts = time.split(":")
+            val elapsedHours = parts[0].toFloat() + parts[1].toFloat() / 60f + parts[2].toFloat() / 3600f
+            val temperature = temp.toFloat()
+            logEntries.add(Entry(elapsedHours, temperature))
+        }
+
+        if (message.startsWith("M")) {
+            currentTempCelsius.value = message.removePrefix("M").toFloatOrNull() ?: currentTempCelsius.value
         }
     }
 
@@ -380,7 +404,7 @@ class MainActivity : ComponentActivity() {
                     minTemp = -20f,
                     maxTemp = 50f,
                     useFahrenheit = true,
-                    thermometerHeight = 350.dp  // or however big you want
+                    thermometerHeight = 350.dp
                 )
             }
         }
@@ -395,8 +419,7 @@ class MainActivity : ComponentActivity() {
             Column(
                 modifier = Modifier
                     .padding(contentPadding)
-                    .fillMaxSize()
-                    .padding(24.dp),
+                    .fillMaxSize(),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
@@ -405,8 +428,6 @@ class MainActivity : ComponentActivity() {
                     fontSize = 36.sp,
                     fontWeight = FontWeight.Bold
                 )
-
-                Spacer(modifier = Modifier.height(24.dp))
 
                 Spacer(modifier = Modifier.height(24.dp))
 
@@ -469,13 +490,37 @@ class MainActivity : ComponentActivity() {
                         fillAlpha = 40
                         mode = LineDataSet.Mode.CUBIC_BEZIER
                         }
+                        if (entries.isNotEmpty()) {
+                            val minTemp = entries.minOf { it.y }
+                            val maxTemp = entries.maxOf { it.y }
+                            val maxX = entries.maxOf { it.x }
+
+                            chart.axisLeft.apply {
+                                axisMinimum = minOf(minTemp - 10f, 0f)
+                                axisMaximum = maxOf(maxTemp + 10f, 60f)
+                            }
+
+                            chart.xAxis.apply {
+                                axisMinimum = 0f
+                                axisMaximum = maxX
+                                setLabelCount(6, false)
+                                valueFormatter = object : com.github.mikephil.charting.formatter.ValueFormatter() {
+                                    override fun getFormattedValue(value: Float): String {
+                                        val totalMinutes = (value * 60).toInt()
+                                        val h = totalMinutes / 60
+                                        val m = totalMinutes % 60
+                                        return if (h > 0) "${h}h ${m}m" else "${m}m"
+                                    }
+                                }
+                            }
+                        }
                         chart.data = LineData(dataSet)
                         chart.notifyDataSetChanged()
                         chart.invalidate()
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(280.dp)
+                        .height(400.dp)
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -483,7 +528,8 @@ class MainActivity : ComponentActivity() {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .selectableGroup(),
+                        .selectableGroup()
+                        .padding(24.dp),
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Button(
@@ -509,6 +555,7 @@ class MainActivity : ComponentActivity() {
             GlobalAlertDialog(
                 {
                     showLoggingDialog.value = false
+                    simpleAlert("This will be implemented soon!")
                 },
                 {
                     showLoggingDialog.value = false
@@ -924,6 +971,8 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        val message = command + "\n"
+
         addLog("Sending message...")
 
         val service = bluetoothGatt?.getService(SERVICE_UUID)
@@ -932,7 +981,7 @@ class MainActivity : ComponentActivity() {
         if (characteristic != null) {
             bluetoothGatt?.writeCharacteristic(
                 characteristic,
-                command.toByteArray(),
+                message.toByteArray(),
                 BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             )
         } else {
