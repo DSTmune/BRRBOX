@@ -11,7 +11,6 @@ import android.bluetooth.BluetoothProfile
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.service.controls.actions.CommandAction
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -19,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.os.Environment
 import android.widget.Toast
 import androidx.annotation.RequiresPermission
 import androidx.compose.animation.animateColorAsState
@@ -41,6 +41,9 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.FileOpen
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Visibility
@@ -65,6 +68,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,7 +80,6 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import com.example.brrbox.ui.theme.BRRBOXTheme
 import com.github.mikephil.charting.data.LineDataSet
 import java.util.Locale
 import java.util.UUID
@@ -84,6 +87,8 @@ import androidx.core.graphics.toColorInt
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
+import java.io.File
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
@@ -102,16 +107,22 @@ class MainActivity : ComponentActivity() {
 
     private var showTemperatureDialog = mutableStateOf(false)
     private var showLoggingDialog = mutableStateOf(false)
+    private var showSaveDialog = mutableStateOf(false)
+    private var showGetSavedLogDialog = mutableStateOf(false)
+
     private var receivingLoggingData = mutableStateOf(false)
 
     private var currentTempCelsius = mutableStateOf(0f)
     private var logEntries = mutableStateListOf<Entry>()
 
-    // BLE UUIDs - need to update
+    private val docDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+
+    // BLE UUID
     private val SERVICE_UUID = UUID.fromString("49535343-FE7D-4AE5-8FA9-9FAFD205E455")
     private val RX_CHARACTERISTIC_UUID = UUID.fromString("49535343-8841-43F4-A8D4-ECBE34729BB3")
     private val TX_CHARACTERISTIC_UUID = UUID.fromString("49535343-1E4D-4BD9-BA61-23C647249616")
 
+    // To be removed.
     private val BRRBOX_MAC = "40:84:32:01:3B:28"
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -121,6 +132,14 @@ class MainActivity : ComponentActivity() {
             addLog("Ready to connect.")
         } else {
             addLog("Permissions required")
+        }
+    }
+
+    private val openFileLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            contentResolver.openInputStream(it)?.use { stream ->
+                parseLines(stream.bufferedReader().readLines())
+            }
         }
     }
 
@@ -283,19 +302,10 @@ class MainActivity : ComponentActivity() {
                     receivingLoggingData.value = false
                 }
                 0xE0 -> simpleAlert("Error received from BRRBOX.")
+                0xE1 -> simpleAlert("Error received from BRRBOX: No log.")
                 else -> addLog("Unknown status code: 0x${bytes[0].toInt().and(0xFF).toString(16).uppercase()}")
             }
             return
-        }
-
-        // temporary, remove after byte status messages are implemented.
-        if (message == "LStart") {
-            simpleAlert("Receiving log data...")
-            receivingLoggingData.value = true
-            logEntries.clear()
-        }
-        if (message == "LEnd") {
-            receivingLoggingData.value = false
         }
 
         if (receivingLoggingData.value && message.matches(Regex("T\\d{2}:\\d{2}:\\d{2},-?\\d+\\.?\\d*"))) {
@@ -342,6 +352,12 @@ class MainActivity : ComponentActivity() {
                         enabled = isConnected.value,
                         modifier = Modifier.weight(12f)
                     ) {
+                        Icon(
+                            imageVector = Icons.Default.LockOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text("Unlock")
                     }
                     Spacer(modifier = Modifier.weight(1f))
@@ -350,6 +366,12 @@ class MainActivity : ComponentActivity() {
                         enabled = isConnected.value,
                         modifier = Modifier.weight(12f)
                     ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text("Lock")
                     }
                 }
@@ -564,8 +586,10 @@ class MainActivity : ComponentActivity() {
                     }
                     Spacer(modifier = Modifier.weight(1f))
                     Button(
-                        onClick = { },
-                        enabled = false,
+                        onClick = {
+                            showSaveDialog.value = true
+                        },
+                        enabled = logEntries.isNotEmpty(),
                         modifier = Modifier.weight(12f)
                     ) {
                         Text("Save Logging Data")
@@ -577,7 +601,7 @@ class MainActivity : ComponentActivity() {
             GlobalAlertDialog(
                 {
                     showLoggingDialog.value = false
-                    simpleAlert("This will be implemented soon!")
+                    showGetSavedLogDialog.value = true
                 },
                 {
                     showLoggingDialog.value = false
@@ -590,7 +614,7 @@ class MainActivity : ComponentActivity() {
                         repeat(intervalsPerDay) { index ->
                             val minutes = index * 10
                             val xValue = minutes / 60f
-                            val yValue = (15f + Math.random() * 10).toFloat()
+                            val yValue = (4f + Math.sin(index * 0.3) * 1.5f + (Math.random() - 0.5f) * 0.8f).toFloat()
 
                             logEntries.add(Entry(xValue, yValue))
                         }
@@ -604,6 +628,38 @@ class MainActivity : ComponentActivity() {
                 "Internal Storage",
                 Icons.Default.FileOpen
             )
+        }
+        if (showSaveDialog.value) {
+            val time = LocalDateTime.now()
+            GlobalTextInputDialog(
+                onDismissRequest = { showSaveDialog.value = false },
+                onConfirmation = { name ->
+                    var fileName = name
+                    showSaveDialog.value = false
+                    if (!fileName.endsWith(".csv")) {
+                        fileName = "$fileName.csv"
+                    }
+                    val file = File(getExternalFilesDir(null),fileName)
+                    file.printWriter().use { out ->
+                        out.println(listOf("Elapsed Time", "Temperature (°C)").joinToString(","))
+                        logEntries.forEach { entry ->
+                            out.println(listOf(entry.x.toString(), entry.y.toString()).joinToString(","))
+                        }
+                    }
+                    simpleAlert("File saved!")
+                },
+                dialogTitle = "Save File",
+                dialogText = "Enter a name for your file.",
+                confirmText = "Save",
+                dismissText = "Cancel",
+                icon = Icons.Default.Save,
+                defaultText = time.format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")),
+                validationRegex = Regex("^[\\w\\-. ]+$"),
+                errorMessage = "Invalid file name. Avoid special characters like / \\ : * ? \" < > |",
+            )
+        }
+        if (showGetSavedLogDialog.value) {
+            GetSavedLogDialog({showGetSavedLogDialog.value = false},{showGetSavedLogDialog.value = false})
         }
     }
     @Composable
@@ -910,7 +966,7 @@ class MainActivity : ComponentActivity() {
                                     contentDescription = destination.contentDescription
                                 )
                             },
-                            label = { Text(destination.label) }
+                            label = { Text(destination.label, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         )
                     }
                 }
@@ -1008,6 +1064,18 @@ class MainActivity : ComponentActivity() {
             )
         } else {
             addLog("Error: Service not found")
+        }
+    }
+
+    private fun parseLines(lines : List<String>) {
+        logEntries.clear()
+        lines.drop(1).forEach { line -> // skip header
+            val parts = line.split(",")
+            if (parts.size == 2) {
+                val x = parts[0].toFloatOrNull()
+                val y = parts[1].toFloatOrNull()
+                if (x != null && y != null) logEntries.add(Entry(x, y))
+            }
         }
     }
 
@@ -1154,6 +1222,91 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    fun GetSavedLogDialog(
+        onDismissRequest: () -> Unit,
+        onFileSelected: (File) -> Unit
+    ) {
+        val logFolder = getExternalFilesDir(null)
+        val files = remember {
+            logFolder?.listFiles { f -> f.extension == "csv" }
+                ?.also { addLog("Found ${it.size} files: ${it.map { f -> f.name }}") }
+                ?.sortedByDescending { it.lastModified() }
+                ?: emptyList()
+        }
+
+        AlertDialog(
+            onDismissRequest = onDismissRequest,
+            icon = { Icon(Icons.Default.FileOpen, contentDescription = null) },
+            title = { Text("Open Log File") },
+            text = {
+                Column {
+                    OutlinedButton(
+                        onClick = {
+                            openFileLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "application/csv"))
+                            onDismissRequest()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Get somewhere else...")
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (files.isEmpty()) {
+                        Text(
+                            "No saved logs found.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    } else {
+                        androidx.compose.foundation.lazy.LazyColumn(
+                            modifier = Modifier.heightIn(max = 300.dp)
+                        ) {
+                            items(files.size) { index ->
+                                val file = files[index]
+                                TextButton(
+                                    onClick = {
+                                        parseLines(file.bufferedReader().readLines())
+                                        onFileSelected(file)
+                                        onDismissRequest()
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        Text(
+                                            file.name,
+                                            fontWeight = FontWeight.Medium,
+                                            textAlign = TextAlign.Start,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Text(
+                                            DateTimeFormatter.ofPattern("MMM d, yyyy  HH:mm")
+                                                .format(java.time.Instant.ofEpochMilli(file.lastModified())
+                                                    .atZone(java.time.ZoneId.systemDefault())
+                                                    .toLocalDateTime()),
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textAlign = TextAlign.Start,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                }
+                                if (index < files.size - 1) {
+                                    HorizontalDivider(thickness = 0.5.dp)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = onDismissRequest) { Text("Cancel") }
+            }
+        )
+    }
+
+    @Composable
     fun GlobalAlertDialog(
         onDismissRequest: () -> Unit,
         onConfirmation: () -> Unit,
@@ -1181,6 +1334,74 @@ class MainActivity : ComponentActivity() {
                     onClick = {
                         onConfirmation()
                     }
+                ) {
+                    Text(confirmText)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        onDismissRequest()
+                    }
+                ) {
+                    Text(dismissText)
+                }
+            }
+        )
+    }
+
+    @Composable
+    fun GlobalTextInputDialog(
+        onDismissRequest: () -> Unit,
+        onConfirmation: (String) -> Unit,
+        dialogTitle: String,
+        dialogText: String,
+        confirmText: String,
+        dismissText: String,
+        icon: ImageVector,
+        defaultText: String = "",
+        validationRegex: Regex? = null,
+        errorMessage: String = "Invalid input",
+    ) {
+        var textValue by remember { mutableStateOf(defaultText) }
+        val isError = validationRegex != null && !validationRegex.matches(textValue)
+
+        AlertDialog(
+            icon = {
+                Icon(icon, contentDescription = "Dialog Icon")
+            },
+            title = {
+                Text(text = dialogTitle)
+            },
+            text = {
+                Column {
+                    Text(text = dialogText)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = textValue,
+                        onValueChange = { textValue = it },
+                        singleLine = true,
+                        isError = isError,
+                        supportingText = {
+                            if (isError) {
+                                Text(
+                                    text = errorMessage,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                        }
+                    )
+                }
+            },
+            onDismissRequest = {
+                onDismissRequest()
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (!isError) onConfirmation(textValue)
+                    },
+                    enabled = !isError
                 ) {
                     Text(confirmText)
                 }
