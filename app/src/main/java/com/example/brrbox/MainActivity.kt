@@ -388,8 +388,8 @@ class MainActivity : ComponentActivity() {
         if (showTemperatureDialog.value) {
             TemperatureDialog(
                 onDismiss = { showTemperatureDialog.value = false },
-                onConfirm = { temp ->
-                    sendCommand("T$temp")
+                onConfirm = { command ->
+                    sendCommand(command)
                     showTemperatureDialog.value = false
                 }
             )
@@ -1084,21 +1084,48 @@ class MainActivity : ComponentActivity() {
         onDismiss: () -> Unit,
         onConfirm: (String) -> Unit
     ) {
-        var temperature by remember { mutableStateOf("32") }
         val radioOptions = listOf("°F", "°C")
         val (selectedOption, onOptionSelected) = remember { mutableStateOf(radioOptions[0]) }
         val focusManager = LocalFocusManager.current
         val keyboardController = LocalSoftwareKeyboardController.current
 
-        fun getTempInCelsius(): String {
-            val tempValue = temperature.toFloatOrNull() ?: 0f
-            val celsius = if (selectedOption == "°F") {
-                (tempValue - 32) * 5f / 9f
-            } else {
-                tempValue
-            }
-            return String.format(Locale.US,"%.1f", celsius)
+        var isRangeMode by remember { mutableStateOf(false) }
+        var singleTemp by remember { mutableStateOf("32") }
+        var minTemp by remember { mutableStateOf("32") }
+        var maxTemp by remember { mutableStateOf("33") }
+
+        fun formatSigned(value: Float): String {
+            val sign = if (value >= 0f) "+" else "-"
+            return "$sign%05.1f".format(Math.abs(value))
         }
+
+        fun toCelsius(value: Float): Float =
+            if (selectedOption == "°F") (value - 32f) * 5f / 9f else value
+
+        fun buildCommand(): String {
+            return if (isRangeMode) {
+                val lo = toCelsius(minTemp.toFloatOrNull() ?: 0f)
+                val hi = toCelsius(maxTemp.toFloatOrNull() ?: 0f)
+                "T${formatSigned(lo)}${formatSigned(hi)}"
+            } else {
+                val t = toCelsius(singleTemp.toFloatOrNull() ?: 0f)
+                "T${formatSigned(t - 0.1f)}${formatSigned(t + 0.1f)}"
+            }
+        }
+
+        fun convertAll(fromFahrenheit: Boolean) {
+            fun conv(s: String): String {
+                val v = s.toFloatOrNull() ?: return s
+                val converted = if (fromFahrenheit) (v - 32f) * 5f / 9f else v * 9f / 5f + 32f
+                return String.format(Locale.US, "%.1f", converted)
+            }
+            singleTemp = conv(singleTemp)
+            minTemp = conv(minTemp)
+            maxTemp = conv(maxTemp)
+        }
+
+        val rangeInvalid = isRangeMode &&
+                (minTemp.toFloatOrNull() ?: 0f) >= (maxTemp.toFloatOrNull() ?: 0f)
 
         Dialog(
             onDismissRequest = onDismiss,
@@ -1109,47 +1136,88 @@ class MainActivity : ComponentActivity() {
                     .clickable(
                         indication = null,
                         interactionSource = remember { MutableInteractionSource() }
-                    ) {
-                        focusManager.clearFocus()
-                    },
+                    ) { focusManager.clearFocus() }
             ) {
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(375.dp),
+                        .wrapContentHeight(),
                     shape = RoundedCornerShape(16.dp)
                 ) {
                     Column(
                         modifier = Modifier
-                            .fillMaxSize(),
-                        verticalArrangement = Arrangement.Center,
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
-                            text = "Input a Temperature.",
-                            modifier = Modifier.padding(16.dp),
+                            text = "Set Temperature",
+                            style = MaterialTheme.typography.titleLarge,
                             textAlign = TextAlign.Center
                         )
 
-                        OutlinedTextField(
-                            value = temperature,
-                            onValueChange = { newValue ->
-                                if (newValue.isEmpty() || newValue.matches(Regex("^-?\\d*\\.?\\d*$"))) {
-                                    temperature = newValue
-                                }
-                            },
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Decimal,
-                                imeAction = ImeAction.Done
-                            ),
-                            keyboardActions = KeyboardActions(
-                                onDone = {
-                                    keyboardController?.hide()
-                                    focusManager.clearFocus()
-                                }
-                            ),
-                            singleLine = true
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                "Single",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (!isRangeMode) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Switch(
+                                checked = isRangeMode,
+                                onCheckedChange = { isRangeMode = it }
+                            )
+                            Text(
+                                "Range",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isRangeMode) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        if (!isRangeMode) {
+                            OutlinedTextField(
+                                value = singleTemp,
+                                onValueChange = { if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$"))) singleTemp = it },
+                                label = { Text("Temperature") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide(); focusManager.clearFocus() }),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Text(
+                                "Sends ±0.1° tolerance range",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            OutlinedTextField(
+                                value = minTemp,
+                                onValueChange = { if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$"))) minTemp = it },
+                                label = { Text("Min Temperature") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                                singleLine = true,
+                                isError = rangeInvalid,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = maxTemp,
+                                onValueChange = { if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$"))) maxTemp = it },
+                                label = { Text("Max Temperature") },
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide(); focusManager.clearFocus() }),
+                                singleLine = true,
+                                isError = rangeInvalid,
+                                supportingText = {
+                                    if (rangeInvalid) Text("Max must be greater than Min", color = MaterialTheme.colorScheme.error)
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
 
                         Row(
                             modifier = Modifier
@@ -1160,20 +1228,12 @@ class MainActivity : ComponentActivity() {
                             radioOptions.forEach { option ->
                                 Row(
                                     Modifier
-                                        .height(56.dp)
+                                        .height(48.dp)
                                         .selectable(
                                             selected = (option == selectedOption),
                                             onClick = {
                                                 if (option != selectedOption) {
-                                                    val tempValue = temperature.toFloatOrNull()
-                                                    if (tempValue != null) {
-                                                        val converted = if (selectedOption == "°F") {
-                                                            (tempValue - 32) * 5f / 9f
-                                                        } else {
-                                                            tempValue * 9f / 5f + 32
-                                                        }
-                                                        temperature = String.format(Locale.US,"%.1f", converted)
-                                                    }
+                                                    convertAll(fromFahrenheit = selectedOption == "°F")
                                                     onOptionSelected(option)
                                                 }
                                             },
@@ -1182,10 +1242,7 @@ class MainActivity : ComponentActivity() {
                                         .padding(horizontal = 16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    RadioButton(
-                                        selected = (option == selectedOption),
-                                        onClick = null
-                                    )
+                                    RadioButton(selected = (option == selectedOption), onClick = null)
                                     Text(
                                         text = option,
                                         style = MaterialTheme.typography.bodyLarge,
@@ -1196,24 +1253,14 @@ class MainActivity : ComponentActivity() {
                         }
 
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
                         ) {
+                            TextButton(onClick = onDismiss) { Text("Cancel") }
                             TextButton(
-                                onClick = {
-                                    onConfirm(getTempInCelsius())
-                                },
-                                modifier = Modifier.padding(8.dp),
-                            ) {
-                                Text("Set")
-                            }
-                            TextButton(
-                                onClick = { onDismiss() },
-                                modifier = Modifier.padding(8.dp),
-                            ) {
-                                Text("Cancel")
-                            }
+                                onClick = { onConfirm(buildCommand()) },
+                                enabled = !rangeInvalid
+                            ) { Text("Set") }
                         }
                     }
                 }
