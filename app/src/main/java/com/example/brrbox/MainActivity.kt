@@ -302,7 +302,7 @@ class MainActivity : ComponentActivity() {
                     receivingLoggingData.value = false
                 }
                 0xE0 -> simpleAlert("Error received from BRRBOX.")
-                0xE1 -> simpleAlert("Error received from BRRBOX: No log.")
+                0xE1 -> simpleAlert("Error received from BRRBOX: No logging data available!")
                 else -> addLog("Unknown status code: 0x${bytes[0].toInt().and(0xFF).toString(16).uppercase()}")
             }
             return
