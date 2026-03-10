@@ -267,6 +267,7 @@ class MainActivity : ComponentActivity() {
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray
         ) {
+            addLog("Added to buffer: $value")
             receiveBuffer.append(value.toString(Charsets.UTF_8))
 
             while (receiveBuffer.contains('\n')) {
@@ -1051,7 +1052,7 @@ class MainActivity : ComponentActivity() {
 
         val message = command + "\n"
 
-        addLog("Sending message...")
+        addLog("Sending message: $message")
 
         val service = bluetoothGatt?.getService(SERVICE_UUID)
         val characteristic = service?.getCharacteristic(RX_CHARACTERISTIC_UUID)
