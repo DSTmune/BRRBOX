@@ -87,6 +87,7 @@ import androidx.core.graphics.toColorInt
 import com.github.mikephil.charting.charts.LineChart
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
+import kotlinx.coroutines.delay
 import java.io.File
 import java.time.LocalDateTime
 import java.time.LocalTime
@@ -267,7 +268,6 @@ class MainActivity : ComponentActivity() {
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray
         ) {
-            addLog("Added to buffer: $value")
             receiveBuffer.append(value.toString(Charsets.UTF_8))
 
             while (receiveBuffer.contains('\n')) {
@@ -285,9 +285,10 @@ class MainActivity : ComponentActivity() {
     private fun processMessage(message: String) {
         addLog("From BRRBOX: $message")
 
-        val bytes = message.toByteArray(Charsets.UTF_8)
-        if (bytes.size == 1) {
-            when (bytes[0].toInt() and 0xFF) {
+        if (message.matches(Regex("X[0-9A-Fa-f]{2}")))
+        {
+            val byte = message.removePrefix("X").toByte()
+            when (byte.toInt() and 0xFF) {
                 0x00 -> simpleAlert("Message received!")
                 0x01 -> simpleAlert("Connected to BRRBOX!")
                 0x02 -> simpleAlert("Device locked successfully.")
@@ -304,7 +305,7 @@ class MainActivity : ComponentActivity() {
                 }
                 0xE0 -> simpleAlert("Error received from BRRBOX.")
                 0xE1 -> simpleAlert("Error received from BRRBOX: No logging data available!")
-                else -> addLog("Unknown status code: 0x${bytes[0].toInt().and(0xFF).toString(16).uppercase()}")
+                else -> addLog("Unknown status code: 0x${byte.toInt().and(0xFF).toString(16).uppercase()}")
             }
             return
         }
@@ -395,7 +396,8 @@ class MainActivity : ComponentActivity() {
                 }
             )
         }
-    }    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    }
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun MonitorScreen(modifier: Modifier = Modifier) {
         Scaffold(
@@ -415,14 +417,7 @@ class MainActivity : ComponentActivity() {
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(32.dp))
-                Button(
-                    onClick = { sendCommand("M") },
-                    enabled = isConnected.value,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Get Live Temperature")
-                }
-                Spacer(modifier = Modifier.height(32.dp))
+
                 ThermometerGraphic(
                     temperatureCelsius = currentTempCelsius.value,
                     minTemp = -20f,
@@ -430,6 +425,14 @@ class MainActivity : ComponentActivity() {
                     useFahrenheit = true,
                     thermometerHeight = 350.dp
                 )
+            }
+        }
+        LaunchedEffect(Unit) {
+            while (true) {
+                if (isConnected.value) {
+                    sendCommand("M")
+                }
+                delay(1000)
             }
         }
     }
@@ -521,17 +524,17 @@ class MainActivity : ComponentActivity() {
                     },
                     update = { chart ->
                         val dataSet = LineDataSet(entries, "Temperature (°C)").apply {
-                        color = "#1C86FF".toColorInt()
-                        setCircleColor("#1C86FF".toColorInt())
-                        circleRadius = 3f
-                        circleHoleRadius = 1.5f
-                        circleHoleColor = android.graphics.Color.WHITE
-                        lineWidth = 2f
-                        setDrawValues(false)
-                        setDrawFilled(true)
-                        fillColor = "#1C86FF".toColorInt()
-                        fillAlpha = 40
-                        mode = LineDataSet.Mode.CUBIC_BEZIER
+                            color = "#1C86FF".toColorInt()
+                            setCircleColor("#1C86FF".toColorInt())
+                            circleRadius = 3f
+                            circleHoleRadius = 1.5f
+                            circleHoleColor = android.graphics.Color.WHITE
+                            lineWidth = 2f
+                            setDrawValues(false)
+                            setDrawFilled(true)
+                            fillColor = "#1C86FF".toColorInt()
+                            fillAlpha = 40
+                            mode = LineDataSet.Mode.CUBIC_BEZIER
                         }
                         if (entries.isNotEmpty()) {
                             val minTemp = entries.minOf { it.y }
@@ -580,7 +583,7 @@ class MainActivity : ComponentActivity() {
                     Button(
                         onClick = {
                             showLoggingDialog.value = true
-                                  },
+                        },
                         modifier = Modifier.weight(12f)
                     ) {
                         Text("Get Logging Data")
@@ -908,13 +911,13 @@ class MainActivity : ComponentActivity() {
         bluetoothAdapter = bluetoothManager.adapter
 
         requestBluetoothPermissions()
-        
+
         setContent {
             MaterialTheme {
                 MainScreen()
             }
         }
-        
+
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
