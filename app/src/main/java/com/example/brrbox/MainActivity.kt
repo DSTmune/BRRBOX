@@ -190,61 +190,101 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+// ── Data model for a scan result ────────────────────────────────────────────
+
+    data class ScannedDevice(
+        val address: String,
+        val advertisedName: String?,   // from SN command on RNBD350 (IA,09)
+        val rssi: Int,
+        val manufacturerId: Int?,      // company ID from IA,FF (e.g. 0x004C = Apple)
+        val manufacturerPayload: String?,  // remaining bytes after company ID, as hex string
+        val serviceUuids: List<String>
+    ) {
+        // Map company ID to a human-readable name
+        // IA,FF on RNBD350 puts your custom company ID as the SparseArray key
+        val manufacturerName: String
+            get() = when (manufacturerId) {
+                0x0006 -> "Microsoft"
+                0x004C -> "Apple"
+                0x0075 -> "Samsung"
+                0x00E0 -> "Google"
+                0x0822 -> "Microchip"
+                0x20BB -> "BRRBOX"
+                else   -> if (manufacturerId != null)
+                    "Unknown (0x${"%04X".format(manufacturerId)})"
+                else "None"
+            }
+    }
+
+// ── Internal scan state (add these to your existing class fields) ─────────────
+
+    private val _scannedDevices = mutableStateListOf<ScannedDevice>()
+    val scannedDevices: List<ScannedDevice> get() = _scannedDevices
+
+// ── Reworked scan callback ───────────────────────────────────────────────────
+
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             if (ActivityCompat.checkSelfPermission(
                     this@MainActivity,
                     Manifest.permission.BLUETOOTH_CONNECT
                 ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                return
-            }
+            ) return
 
             result?.let { scanResult ->
-                val device = scanResult.device
-                val deviceName = device.name ?: "Unknown"
-                val deviceAddress = device.address
-                val rssi = scanResult.rssi
-
+                val device     = scanResult.device
+                val address    = device.address
+                val rssi       = scanResult.rssi
                 val scanRecord = scanResult.scanRecord
 
-                // 🔹 Device name from advertisement (may differ from device.name)
-                val advName = scanRecord?.deviceName
+                if (discoveredDevices.contains(address)) return
+                discoveredDevices.add(address)
 
-                // 🔹 Manufacturer specific data
+                // ── Device name ──────────────────────────────────────────────────
+                // advName comes from the advertisement packet (set via SN on RNBD350).
+                // device.name is the cached system name, which may be stale — prefer advName.
+                val advName = scanRecord?.deviceName ?: device.name
+
                 val manufacturerData = scanRecord?.manufacturerSpecificData
+                var manufacturerId: Int?    = null
+                var manufacturerPayload: String? = null
 
-                // 🔹 Service UUIDs
-                val serviceUuids = scanRecord?.serviceUuids
+                if (manufacturerData != null && manufacturerData.size() > 0) {
+                    manufacturerId = manufacturerData.keyAt(0)
+                    val rawBytes   = manufacturerData.valueAt(0)
 
-                if (!discoveredDevices.contains(deviceAddress)) {
-                    discoveredDevices.add(deviceAddress)
-
-                    addLog("Found: $deviceName ($deviceAddress) RSSI: $rssi dBm")
-
-                    addLog("Adv Name: $advName")
-
-                    // Manufacturer data parsing
-                    manufacturerData?.let { sparseArray ->
-                        for (i in 0 until sparseArray.size()) {
-                            val manufacturerId = sparseArray.keyAt(i)
-                            val data = sparseArray.valueAt(i)
-
-                            addLog("Manufacturer ID: $manufacturerId")
-                            addLog("Manufacturer Data: ${data.joinToString(", ") { it.toString() }}")
-                        }
-                    }
-
-                    // Service UUIDs
-                    serviceUuids?.forEach {
-                        addLog("Service UUID: $it")
+                    manufacturerPayload = rawBytes.joinToString(" ") {
+                        "%02X".format(it.toInt() and 0xFF)  // unsigned hex, e.g. "DE AD BE EF"
                     }
                 }
+
+                val serviceUuids = scanRecord?.serviceUuids
+                    ?.map { it.uuid.toString().uppercase() }
+                    ?: emptyList()
+
+                val scanned = ScannedDevice(
+                    address           = address,
+                    advertisedName    = advName,
+                    rssi              = rssi,
+                    manufacturerId    = manufacturerId,
+                    manufacturerPayload = manufacturerPayload,
+                    serviceUuids      = serviceUuids
+                )
+
+                _scannedDevices.add(scanned)
+
+                // Debug log (concise)
+                addLog("Found: ${advName ?: "?"} ($address)  RSSI: $rssi dBm")
+                if (manufacturerId != null) {
+                    addLog("  Manufacturer: ${scanned.manufacturerName} | Payload: $manufacturerPayload")
+                }
+                serviceUuids.forEach { addLog("  Service: $it") }
             }
         }
 
         override fun onScanFailed(errorCode: Int) {
-            addLog("Scan failed with error code: $errorCode")
+            addLog("Scan failed: error $errorCode")
+            isScanning.value = false
         }
     }
 
@@ -1138,38 +1178,44 @@ class MainActivity : ComponentActivity() {
     }
 
     fun scanForBRRBOX() {
-        isScanning.value = true
-        discoveredDevices.clear()
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
-            ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            addLog("Bluetooth permission is required.")
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
+            != PackageManager.PERMISSION_GRANTED ||
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+            != PackageManager.PERMISSION_GRANTED) {
+            addLog("Bluetooth permissions required.")
             return
         }
 
-        simpleAlert("Searching...")
+        _scannedDevices.clear()
+        discoveredDevices.clear()
+        isScanning.value = true
+
         addLog("Scanning for devices...")
         val scanSettings = android.bluetooth.le.ScanSettings.Builder()
             .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
+
         try {
             bluetoothAdapter?.bluetoothLeScanner?.startScan(null, scanSettings, scanCallback)
         } catch (e: SecurityException) {
-            addLog("SecurityException on scan: ${e.message}")
-            simpleAlert("Permission error. Check if location and bluetooth are enabled!")
+            addLog("Permission error on scan: ${e.message}")
+            isScanning.value = false
             return
         } catch (e: Exception) {
             addLog("Scan error: ${e.message}")
+            isScanning.value = false
             return
         }
 
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
-                bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanMACCallback)
-            }
-            simpleAlert("Scan complete!")
-            addLog("Scan Complete")
+            try {
+                bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+            } catch (_: SecurityException) {}
+
+            addLog("Scan complete — found ${_scannedDevices.size} device(s)")
             isScanning.value = false
-        }, 10000)
+            simpleAlert("Scan complete!")
+        }, 10_000)
     }
 
     fun connectToMacAddress() {
