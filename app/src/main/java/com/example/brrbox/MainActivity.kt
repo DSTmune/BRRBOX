@@ -103,8 +103,10 @@ class MainActivity : ComponentActivity() {
     // Status states
     private var isConnected = mutableStateOf(false)
     private var isConnecting = mutableStateOf(false)
+    private var isScanning = mutableStateOf(false)
     private var debugLog = mutableStateOf(mutableListOf<String>())
     private val discoveredDevices = mutableSetOf<String>()
+    private val currentDeviceName = mutableStateOf<String?>(null)
 
     private var showTemperatureDialog = mutableStateOf(false)
     private var showLoggingDialog = mutableStateOf(false)
@@ -153,7 +155,7 @@ class MainActivity : ComponentActivity() {
         debugLog.value = currentLog
         android.util.Log.d("BRRBOX", message)
     }
-    private val scanCallback = object : ScanCallback() {
+    private val scanMACCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             if (ActivityCompat.checkSelfPermission(
                     this@MainActivity,
@@ -179,6 +181,64 @@ class MainActivity : ComponentActivity() {
                     bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
                     addLog("Connecting to BRRBOX...")
                     bluetoothGatt = device.connectGatt(this@MainActivity, false, gattCallback)
+                }
+            }
+        }
+
+        override fun onScanFailed(errorCode: Int) {
+            addLog("Scan failed with error code: $errorCode")
+        }
+    }
+
+    private val scanCallback = object : ScanCallback() {
+        override fun onScanResult(callbackType: Int, result: ScanResult?) {
+            if (ActivityCompat.checkSelfPermission(
+                    this@MainActivity,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                return
+            }
+
+            result?.let { scanResult ->
+                val device = scanResult.device
+                val deviceName = device.name ?: "Unknown"
+                val deviceAddress = device.address
+                val rssi = scanResult.rssi
+
+                val scanRecord = scanResult.scanRecord
+
+                // 🔹 Device name from advertisement (may differ from device.name)
+                val advName = scanRecord?.deviceName
+
+                // 🔹 Manufacturer specific data
+                val manufacturerData = scanRecord?.manufacturerSpecificData
+
+                // 🔹 Service UUIDs
+                val serviceUuids = scanRecord?.serviceUuids
+
+                if (!discoveredDevices.contains(deviceAddress)) {
+                    discoveredDevices.add(deviceAddress)
+
+                    addLog("Found: $deviceName ($deviceAddress) RSSI: $rssi dBm")
+
+                    addLog("Adv Name: $advName")
+
+                    // Manufacturer data parsing
+                    manufacturerData?.let { sparseArray ->
+                        for (i in 0 until sparseArray.size()) {
+                            val manufacturerId = sparseArray.keyAt(i)
+                            val data = sparseArray.valueAt(i)
+
+                            addLog("Manufacturer ID: $manufacturerId")
+                            addLog("Manufacturer Data: ${data.joinToString(", ") { it.toString() }}")
+                        }
+                    }
+
+                    // Service UUIDs
+                    serviceUuids?.forEach {
+                        addLog("Service UUID: $it")
+                    }
                 }
             }
         }
@@ -685,10 +745,31 @@ class MainActivity : ComponentActivity() {
                     fontWeight = FontWeight.Bold
                 )
 
-                Spacer(modifier = Modifier.height(48.dp))
+                Text(if (currentDeviceName.value != null) "Connected to ${currentDeviceName.value}" else "Not connected",
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
 
                 Button(
-                    onClick = { connectToBRRBOX() },
+                    onClick = { scanForBRRBOX() },
+                    enabled = !isScanning.value,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isScanning.value) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Scanning...")
+                    } else {
+                        Text("Scan for BRRBOX")
+                    }
+                }
+
+                Button(
+                    onClick = { connectToMacAddress() },
                     enabled = !isConnected.value && !isConnecting.value,
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -808,8 +889,10 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun DebugScreen(modifier: Modifier = Modifier) {
+        var command by remember { mutableStateOf("") }
         Scaffold(
             modifier = Modifier.fillMaxSize()
         ) { contentPadding ->
@@ -827,15 +910,79 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
 
-                Button(
-                    onClick = { debugConnect() },
-                    enabled = !isConnected.value,
-                    modifier = Modifier.fillMaxWidth()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectableGroup(),
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    Text("Connect to BRRBOX Debug")
+                    Button(
+                        onClick = { connectToMacAddress() },
+                        enabled = !isConnected.value && !isConnecting.value,
+                        modifier = Modifier.weight(10f)
+                    ) {
+                        if (isConnecting.value) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Connecting...")
+                        } else {
+                            Text("Connect via MAC")
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    Button(
+                        onClick = { debugConnect() },
+                        enabled = !isConnected.value,
+                        modifier = Modifier.weight(10f)
+                    ) {
+                        Text("Fake Connect")
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    Button(
+                        onClick = { disconnect() },
+                        enabled = isConnected.value,
+                        modifier = Modifier.weight(10f),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("Disconnect")
+                    }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    "Custom Commands",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+
+                OutlinedTextField(
+                    value = command,
+                    onValueChange = { command = it },
+                    singleLine = true,
+                    label = { Text("Command...") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Button(
+                    onClick = { sendCommand(command) },
+                    enabled = isConnected.value,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Send Command")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
                     "Debug Logs",
@@ -990,7 +1137,42 @@ class MainActivity : ComponentActivity() {
         requestPermissionLauncher.launch(permissions.toTypedArray())
     }
 
-    fun connectToBRRBOX() {
+    fun scanForBRRBOX() {
+        isScanning.value = true
+        discoveredDevices.clear()
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            addLog("Bluetooth permission is required.")
+            return
+        }
+
+        simpleAlert("Searching...")
+        addLog("Scanning for devices...")
+        val scanSettings = android.bluetooth.le.ScanSettings.Builder()
+            .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+        try {
+            bluetoothAdapter?.bluetoothLeScanner?.startScan(null, scanSettings, scanCallback)
+        } catch (e: SecurityException) {
+            addLog("SecurityException on scan: ${e.message}")
+            simpleAlert("Permission error. Check if location and bluetooth are enabled!")
+            return
+        } catch (e: Exception) {
+            addLog("Scan error: ${e.message}")
+            return
+        }
+
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+                bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanMACCallback)
+            }
+            simpleAlert("Scan complete!")
+            addLog("Scan Complete")
+            isScanning.value = false
+        }, 10000)
+    }
+
+    fun connectToMacAddress() {
         discoveredDevices.clear()
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
             ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
@@ -1016,7 +1198,7 @@ class MainActivity : ComponentActivity() {
             .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
         try {
-            bluetoothAdapter?.bluetoothLeScanner?.startScan(null, scanSettings, scanCallback)
+            bluetoothAdapter?.bluetoothLeScanner?.startScan(null, scanSettings, scanMACCallback)
         } catch (e: SecurityException) {
             addLog("SecurityException on scan: ${e.message}")
             simpleAlert("Permission error. Check if location and bluetooth are enabled!")
@@ -1028,7 +1210,7 @@ class MainActivity : ComponentActivity() {
 
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
-                bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+                bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanMACCallback)
             }
             if (!isConnected.value) {
                 isConnecting.value = false
