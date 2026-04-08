@@ -106,6 +106,7 @@ class MainActivity : ComponentActivity() {
     private var isScanning = mutableStateOf(false)
     private var debugLog = mutableStateOf(mutableListOf<String>())
     private val discoveredDevices = mutableSetOf<String>()
+    private val discoveredBRRBOXList = mutableStateListOf<ScannedDevice>()
     private val currentDeviceName = mutableStateOf<String?>(null)
 
     private var showTemperatureDialog = mutableStateOf(false)
@@ -216,13 +217,6 @@ class MainActivity : ComponentActivity() {
             }
     }
 
-// ── Internal scan state (add these to your existing class fields) ─────────────
-
-    private val _scannedDevices = mutableStateListOf<ScannedDevice>()
-    val scannedDevices: List<ScannedDevice> get() = _scannedDevices
-
-// ── Reworked scan callback ───────────────────────────────────────────────────
-
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             if (ActivityCompat.checkSelfPermission(
@@ -271,7 +265,10 @@ class MainActivity : ComponentActivity() {
                     serviceUuids      = serviceUuids
                 )
 
-                _scannedDevices.add(scanned)
+                if(scanned.manufacturerName == "BRRBOX") {
+                    discoveredBRRBOXList.add(scanned)
+                    addLog("DISCOVERED A BRRBOX!")
+                }
 
                 // Debug log (concise)
                 addLog("Found: ${advName ?: "?"} ($address)  RSSI: $rssi dBm")
@@ -381,6 +378,8 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+
 
     private fun processMessage(message: String) {
         addLog("From BRRBOX: $message")
@@ -1186,8 +1185,8 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        _scannedDevices.clear()
         discoveredDevices.clear()
+        discoveredBRRBOXList.clear()
         isScanning.value = true
 
         addLog("Scanning for devices...")
