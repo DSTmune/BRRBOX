@@ -18,7 +18,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.view.MotionEvent
 import android.widget.Toast
 import androidx.annotation.RequiresPermission
 import androidx.compose.animation.animateColorAsState
@@ -27,9 +32,12 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +49,7 @@ import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.FileOpen
+import androidx.compose.material.icons.filled.Kitchen
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Save
@@ -62,6 +71,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -85,12 +95,19 @@ import java.util.Locale
 import java.util.UUID
 import androidx.core.graphics.toColorInt
 import com.github.mikephil.charting.charts.LineChart
+import com.github.mikephil.charting.components.XAxis
+import com.github.mikephil.charting.components.YAxis
 import com.github.mikephil.charting.data.Entry
 import com.github.mikephil.charting.data.LineData
+import com.github.mikephil.charting.formatter.ValueFormatter
+import com.github.mikephil.charting.listener.ChartTouchListener
+import com.github.mikephil.charting.listener.OnChartGestureListener
 import kotlinx.coroutines.delay
 import java.io.File
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.roundToInt
 
@@ -127,6 +144,7 @@ class MainActivity : ComponentActivity() {
     private val TX_CHARACTERISTIC_UUID = UUID.fromString("49535343-1E4D-4BD9-BA61-23C647249616")
 
     // To be removed.
+    private var BRRBOX_MAC_SEARCHING = ""
     private val BRRBOX_MAC = "40:84:32:01:3B:28"
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -154,7 +172,7 @@ class MainActivity : ComponentActivity() {
             currentLog.removeAt(currentLog.lastIndex)
         }
         debugLog.value = currentLog
-        android.util.Log.d("BRRBOX", message)
+        Log.d("BRRBOX", message)
     }
     private val scanMACCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
@@ -178,7 +196,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 // Existing logic: connect immediately if it's BRRBOX
-                if (device.address.equals(BRRBOX_MAC, ignoreCase = true)) {
+                if (device.address.equals(BRRBOX_MAC_SEARCHING, ignoreCase = true)) {
                     bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
                     addLog("Connecting to BRRBOX...")
                     bluetoothGatt = device.connectGatt(this@MainActivity, false, gattCallback)
@@ -562,12 +580,12 @@ class MainActivity : ComponentActivity() {
 
                         LineChart(context).apply {
                             xAxis.apply {
-                                position = com.github.mikephil.charting.components.XAxis.XAxisPosition.BOTTOM
+                                position = XAxis.XAxisPosition.BOTTOM
                                 granularity = 1f
                                 setLabelCount(6, false)
                                 textColor = android.graphics.Color.GRAY
                                 gridColor = android.graphics.Color.LTGRAY
-                                valueFormatter = object : com.github.mikephil.charting.formatter.ValueFormatter() {
+                                valueFormatter = object : ValueFormatter() {
                                     override fun getFormattedValue(value: Float): String {
                                         val totalMinutes = (value * 60).roundToInt()
                                         val h = totalMinutes / 60
@@ -584,7 +602,7 @@ class MainActivity : ComponentActivity() {
                                 axisMaximum = 32f
                                 granularity = 0.1f
                                 isGranularityEnabled = true
-                                valueFormatter = object : com.github.mikephil.charting.formatter.ValueFormatter() {
+                                valueFormatter = object : ValueFormatter() {
                                     override fun getFormattedValue(value: Float) =
                                         if (value % 1f == 0f) "${value.toInt()}°C" else "${"%.1f".format(value)}°C"
                                 }
@@ -600,24 +618,24 @@ class MainActivity : ComponentActivity() {
                             setExtraOffsets(8f, 8f, 8f, 8f)
                             animateX(1000)
 
-                            onChartGestureListener = object : com.github.mikephil.charting.listener.OnChartGestureListener {
-                                override fun onChartGestureEnd(me: android.view.MotionEvent?, lastPerformedGesture: com.github.mikephil.charting.listener.ChartTouchListener.ChartGesture?) {
+                            onChartGestureListener = object : OnChartGestureListener {
+                                override fun onChartGestureEnd(me: MotionEvent?, lastPerformedGesture: ChartTouchListener.ChartGesture?) {
                                     updateXAxisGranularity(this@apply)
                                     updateYAxisGranularity(this@apply)
                                 }
-                                override fun onChartScale(me: android.view.MotionEvent?, scaleX: Float, scaleY: Float) {
+                                override fun onChartScale(me: MotionEvent?, scaleX: Float, scaleY: Float) {
                                     updateXAxisGranularity(this@apply)
                                     updateYAxisGranularity(this@apply)
                                 }
-                                override fun onChartTranslate(me: android.view.MotionEvent?, dX: Float, dY: Float) {
+                                override fun onChartTranslate(me: MotionEvent?, dX: Float, dY: Float) {
                                     updateXAxisGranularity(this@apply)
                                     updateYAxisGranularity(this@apply)
                                 }
-                                override fun onChartGestureStart(me: android.view.MotionEvent?, lastPerformedGesture: com.github.mikephil.charting.listener.ChartTouchListener.ChartGesture?) {}
-                                override fun onChartLongPressed(me: android.view.MotionEvent?) {}
-                                override fun onChartDoubleTapped(me: android.view.MotionEvent?) {}
-                                override fun onChartSingleTapped(me: android.view.MotionEvent?) {}
-                                override fun onChartFling(me1: android.view.MotionEvent?, me2: android.view.MotionEvent?, velocityX: Float, velocityY: Float) {}
+                                override fun onChartGestureStart(me: MotionEvent?, lastPerformedGesture: ChartTouchListener.ChartGesture?) {}
+                                override fun onChartLongPressed(me: MotionEvent?) {}
+                                override fun onChartDoubleTapped(me: MotionEvent?) {}
+                                override fun onChartSingleTapped(me: MotionEvent?) {}
+                                override fun onChartFling(me1: MotionEvent?, me2: MotionEvent?, velocityX: Float, velocityY: Float) {}
                             }
                         }
                     },
@@ -649,7 +667,7 @@ class MainActivity : ComponentActivity() {
                                 axisMinimum = 0f
                                 axisMaximum = maxX
                                 setLabelCount(6, false)
-                                valueFormatter = object : com.github.mikephil.charting.formatter.ValueFormatter() {
+                                valueFormatter = object : ValueFormatter() {
                                     override fun getFormattedValue(value: Float): String {
                                         val totalMinutes = (value * 60).toInt()
                                         val h = totalMinutes / 60
@@ -784,7 +802,7 @@ class MainActivity : ComponentActivity() {
                     fontWeight = FontWeight.Bold
                 )
 
-                Text(if (currentDeviceName.value != null) "Connected to ${currentDeviceName.value}" else "Not connected",
+                Text(if (currentDeviceName.value != null && isConnected.value) "Connected to ${currentDeviceName.value}" else "Not connected",
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -806,37 +824,22 @@ class MainActivity : ComponentActivity() {
                         Text("Scan for BRRBOX")
                     }
                 }
-
-                Button(
-                    onClick = { connectToMacAddress() },
-                    enabled = !isConnected.value && !isConnecting.value,
-                    modifier = Modifier.fillMaxWidth()
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (isConnecting.value) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
+                    items(discoveredBRRBOXList) { item ->
+                        ListRow(
+                            item = item,
+                            onTopButtonClick = {
+                                currentDeviceName.value = item.advertisedName
+                                connectToMacAddress(item.address)
+                            },
+                            onBottomButtonClick = { simpleAlert("Coming Soon!") }
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Connecting...")
-                    } else {
-                        Text("Connect to BRRBOX")
                     }
                 }
-
-                Button(
-                    onClick = { disconnect() },
-                    enabled = isConnected.value,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Text("Disconnect from BRRBOX")
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
             }
         }
     }
@@ -956,7 +959,7 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Button(
-                        onClick = { connectToMacAddress() },
+                        onClick = { connectToMacAddress(BRRBOX_MAC) },
                         enabled = !isConnected.value && !isConnecting.value,
                         modifier = Modifier.weight(10f)
                     ) {
@@ -1037,7 +1040,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = MaterialTheme.shapes.medium
                 ) {
-                    androidx.compose.foundation.lazy.LazyColumn(
+                    LazyColumn(
                         modifier = Modifier.padding(8.dp),
                         reverseLayout = false
                     ) {
@@ -1045,7 +1048,7 @@ class MainActivity : ComponentActivity() {
                             Text(
                                 debugLog.value[index],
                                 fontSize = 12.sp,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                fontFamily = FontFamily.Monospace,
                                 modifier = Modifier.padding(vertical = 2.dp)
                             )
                             if (index < debugLog.value.size - 1) {
@@ -1190,8 +1193,8 @@ class MainActivity : ComponentActivity() {
         isScanning.value = true
 
         addLog("Scanning for devices...")
-        val scanSettings = android.bluetooth.le.ScanSettings.Builder()
-            .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
+        val scanSettings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
         try {
@@ -1206,18 +1209,18 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        Handler(Looper.getMainLooper()).postDelayed({
             try {
                 bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
             } catch (_: SecurityException) {}
 
-            addLog("Scan complete — found ${_scannedDevices.size} device(s)")
+            addLog("Scan complete — found ${discoveredBRRBOXList.size} BRRBOXes.")
             isScanning.value = false
             simpleAlert("Scan complete!")
         }, 10_000)
     }
 
-    fun connectToMacAddress() {
+    fun connectToMacAddress(macToSearch: String) {
         discoveredDevices.clear()
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
             ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
@@ -1227,9 +1230,11 @@ class MainActivity : ComponentActivity() {
 
         isConnecting.value = true
 
+        BRRBOX_MAC_SEARCHING = macToSearch
+
         // Try bonded first
         bluetoothAdapter?.bondedDevices?.forEach { device ->
-            if (device.address.equals(BRRBOX_MAC, ignoreCase = true)) {
+            if (device.address.equals(BRRBOX_MAC_SEARCHING, ignoreCase = true)) {
                 addLog("Found bonded BRRBOX - Connecting...")
                 bluetoothGatt = device.connectGatt(this, false, gattCallback)
                 return
@@ -1239,8 +1244,8 @@ class MainActivity : ComponentActivity() {
         // Fall back to scanning
         simpleAlert("Searching...")
         addLog("Scanning for devices...")
-        val scanSettings = android.bluetooth.le.ScanSettings.Builder()
-            .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
+        val scanSettings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
         try {
             bluetoothAdapter?.bluetoothLeScanner?.startScan(null, scanSettings, scanMACCallback)
@@ -1253,7 +1258,7 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        Handler(Looper.getMainLooper()).postDelayed({
             if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
                 bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanMACCallback)
             }
@@ -1263,6 +1268,60 @@ class MainActivity : ComponentActivity() {
                 addLog("BRRBOX not found")
             }
         }, 10000)
+    }
+
+    @Composable
+    fun ListRow(
+        item: ScannedDevice,
+        onTopButtonClick: () -> Unit,
+        onBottomButtonClick: () -> Unit
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(80.dp)
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(8.dp))
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Kitchen,
+                contentDescription = item.advertisedName,
+                modifier = Modifier.size(36.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Text(
+                text = item.advertisedName ?: "Unnamed BRRBOX",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge
+            )
+
+            Column(
+                verticalArrangement = Arrangement.SpaceEvenly,
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxHeight()
+            ) {
+                Button(
+                    onClick = onTopButtonClick,
+                    modifier = Modifier.height(30.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    enabled = !isConnected.value
+                ) {
+                    Text("Connect", style = MaterialTheme.typography.labelSmall)
+                }
+                Button(
+                    onClick = onBottomButtonClick,
+                    modifier = Modifier.height(30.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Rename", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
     }
 
     fun debugConnect() {
@@ -1537,7 +1596,7 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
                     } else {
-                        androidx.compose.foundation.lazy.LazyColumn(
+                        LazyColumn(
                             modifier = Modifier.heightIn(max = 300.dp)
                         ) {
                             items(files.size) { index ->
@@ -1559,8 +1618,9 @@ class MainActivity : ComponentActivity() {
                                         )
                                         Text(
                                             DateTimeFormatter.ofPattern("MMM d, yyyy  HH:mm")
-                                                .format(java.time.Instant.ofEpochMilli(file.lastModified())
-                                                    .atZone(java.time.ZoneId.systemDefault())
+                                                .format(
+                                                    Instant.ofEpochMilli(file.lastModified())
+                                                    .atZone(ZoneId.systemDefault())
                                                     .toLocalDateTime()),
                                             fontSize = 11.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1851,7 +1911,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateYAxisGranularity(chart: LineChart) {
-        val transformer = chart.getTransformer(com.github.mikephil.charting.components.YAxis.AxisDependency.LEFT)
+        val transformer = chart.getTransformer(YAxis.AxisDependency.LEFT)
         val bounds = chart.contentRect
         val topLeft = transformer.getValuesByTouchPoint(bounds.left, bounds.top)
         val bottomLeft = transformer.getValuesByTouchPoint(bounds.left, bounds.bottom)
