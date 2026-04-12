@@ -914,7 +914,8 @@ class MainActivity : ComponentActivity() {
                             username = ""
                             password = ""
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        enabled = currentLogin.value == null,
                     ) {
                         Text("Sign In")
                     }
@@ -926,6 +927,36 @@ class MainActivity : ComponentActivity() {
                         Text("Log Out")
                     }
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    TextButton(
+                        onClick = {
+
+                        },
+                        colors = ButtonDefaults.textButtonColors(
+                            containerColor = Color.Transparent
+                        ),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text("Create Account")
+                    }
+
+                    TextButton(
+                        onClick = {
+
+                        },
+                        colors = ButtonDefaults.textButtonColors(
+                            containerColor = Color.Transparent
+                        ),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text("Forgot Password?")
+                    }
+                }
+
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
