@@ -966,8 +966,13 @@ class MainActivity : ComponentActivity() {
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 400.dp),
-                    contentPadding = PaddingValues(8.dp),
+                        .weight(1f),
+                    contentPadding = PaddingValues(
+                        start = 8.dp,
+                        end = 8.dp,
+                        top = 8.dp,
+                        bottom = 80.dp // 👈 adjust as needed
+                    ),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(discoveredBRRBOXList) { item ->
