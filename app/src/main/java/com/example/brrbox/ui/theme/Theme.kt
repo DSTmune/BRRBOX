@@ -9,35 +9,69 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = BrrBoxBlue,
+    onPrimary = BrrBoxDarkGrey,
+    primaryContainer = BrrBoxDeepBlue,
+    onPrimaryContainer = Color.White,
+    
+    secondary = BrrBoxMediumBlue,
+    onSecondary = BrrBoxDarkGrey,
+    secondaryContainer = BrrBoxBlue.copy(alpha = 0.2f), // Selected tab background
+    onSecondaryContainer = BrrBoxBlue, // Selected tab icon/label
+    
+    tertiary = BrrBoxSkyBlue,
+    onTertiary = BrrBoxDarkGrey,
+    
+    background = BrrBoxDarkGrey,
+    onBackground = BrrBoxWhiteBlue,
+    
+    surface = BrrBoxDarkGrey,
+    onSurface = BrrBoxWhiteBlue,
+    
+    surfaceVariant = Color(0xFF45494C), // Slightly lighter grey for cards/fields
+    onSurfaceVariant = BrrBoxBlue,
+    
+    outline = BrrBoxMediumBlue,
+    inverseSurface = BrrBoxWhiteBlue,
+    inverseOnSurface = BrrBoxDarkGrey,
+    inversePrimary = BrrBoxDeepBlue
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
+    primary = BrrBoxDarkGrey,
     onPrimary = Color.White,
+    primaryContainer = BrrBoxBlue,
+    onPrimaryContainer = BrrBoxDarkGrey,
+    
+    secondary = BrrBoxDeepBlue,
     onSecondary = Color.White,
+    secondaryContainer = BrrBoxDarkGrey.copy(alpha = 0.1f),
+    onSecondaryContainer = BrrBoxDarkGrey,
+    
+    tertiary = BrrBoxMediumBlue,
     onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    
+    background = BrrBoxWhiteBlue,
+    onBackground = BrrBoxDarkGrey,
+    
+    surface = BrrBoxWhiteBlue,
+    onSurface = BrrBoxDarkGrey,
+    
+    surfaceVariant = BrrBoxBlue.copy(alpha = 0.3f),
+    onSurfaceVariant = BrrBoxDarkGrey,
+    
+    outline = BrrBoxDeepBlue
 )
 
 @Composable
 fun BRRBOXTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    // Dynamic color is disabled to maintain brand consistency
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {

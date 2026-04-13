@@ -2,10 +2,15 @@ package com.example.brrbox.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
+val BrrBoxBlue = Color(0xFFA4D8FF)
+val BrrBoxDarkGrey = Color(0xFF35393C)
 
-val Purple40 = Color(0xFF6650a4)
-val PurpleGrey40 = Color(0xFF625b71)
-val Pink40 = Color(0xFF7D5260)
+// Blue variants for secondary/tertiary roles
+val BrrBoxMediumBlue = Color(0xFF82B1FF)
+val BrrBoxLightBlue = Color(0xFFE3F2FD)
+val BrrBoxSkyBlue = Color(0xFFB3E5FC)
+
+// Tasteful accents
+val BrrBoxAccentCyan = Color(0xFF00E5FF)
+val BrrBoxDeepBlue = Color(0xFF1976D2)
+val BrrBoxWhiteBlue = Color(0xFFF0F8FF)

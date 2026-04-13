@@ -38,11 +38,13 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.AccountCircle
@@ -91,6 +93,7 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import com.example.brrbox.ui.theme.BRRBOXTheme
 import com.github.mikephil.charting.data.LineDataSet
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
@@ -460,6 +463,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(contentPadding)
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
@@ -467,7 +471,8 @@ class MainActivity : ComponentActivity() {
                 Text(
                     "BRRBOX Controller",
                     fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.height(32.dp))
                 Row(
@@ -534,6 +539,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(contentPadding)
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
@@ -541,7 +547,8 @@ class MainActivity : ComponentActivity() {
                 Text(
                     "Current Temperature",
                     fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.height(32.dp))
 
@@ -573,14 +580,16 @@ class MainActivity : ComponentActivity() {
             Column(
                 modifier = Modifier
                     .padding(contentPadding)
-                    .fillMaxSize(),
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 Text(
                     "Data Logging",
                     fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
@@ -802,14 +811,16 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(contentPadding)
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                verticalArrangement = Arrangement.Top
             ) {
                 Text(
                     "Bluetooth Pairing",
                     fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
 
                 Text(if (currentDeviceName.value != null && isConnected.value) "Connected to ${currentDeviceName.value}" else "Not connected",
@@ -835,7 +846,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
                     contentPadding = PaddingValues(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -875,6 +886,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(contentPadding)
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
@@ -882,7 +894,8 @@ class MainActivity : ComponentActivity() {
                 Text(
                     "Account Login",
                     fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
 
                 Text(if (currentLogin.value != null) "Signed in as ${currentLogin.value}" else "Not signed in")
@@ -982,7 +995,8 @@ class MainActivity : ComponentActivity() {
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(
                         onClick = {
@@ -1005,7 +1019,7 @@ class MainActivity : ComponentActivity() {
                         colors = ButtonDefaults.textButtonColors(
                             containerColor = Color.Transparent
                         ),
-                        contentPadding = PaddingValues(0.dp)
+                        contentPadding = PaddingValues(horizontal = 8.dp)
                     ) {
                         Text("Create Account")
                     }
@@ -1032,7 +1046,7 @@ class MainActivity : ComponentActivity() {
                         colors = ButtonDefaults.textButtonColors(
                             containerColor = Color.Transparent
                         ),
-                        contentPadding = PaddingValues(0.dp)
+                        contentPadding = PaddingValues(horizontal = 8.dp)
                     ) {
                         Text("Forgot Password?")
                     }
@@ -1054,6 +1068,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(contentPadding)
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -1061,6 +1076,7 @@ class MainActivity : ComponentActivity() {
                     "Debug",
                     fontSize = 36.sp,
                     fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
 
@@ -1148,7 +1164,7 @@ class MainActivity : ComponentActivity() {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .height(300.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = MaterialTheme.shapes.medium
                 ) {
@@ -1222,7 +1238,7 @@ class MainActivity : ComponentActivity() {
         requestBluetoothPermissions()
 
         setContent {
-            MaterialTheme {
+            BRRBOXTheme {
                 MainScreen()
             }
         }
@@ -1564,7 +1580,8 @@ class MainActivity : ComponentActivity() {
                         Text(
                             text = "Set Temperature",
                             style = MaterialTheme.typography.titleLarge,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.primary
                         )
 
                         Row(
@@ -1693,8 +1710,8 @@ class MainActivity : ComponentActivity() {
 
         AlertDialog(
             onDismissRequest = onDismissRequest,
-            icon = { Icon(Icons.Default.FileOpen, contentDescription = null) },
-            title = { Text("Open Log File") },
+            icon = { Icon(Icons.Default.FileOpen, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("Open Log File", color = MaterialTheme.colorScheme.primary) },
             text = {
                 Column {
                     OutlinedButton(
@@ -1776,10 +1793,10 @@ class MainActivity : ComponentActivity() {
     ) {
         AlertDialog(
             icon = {
-                Icon(icon, contentDescription = "Example Icon")
+                Icon(icon, contentDescription = "Example Icon", tint = MaterialTheme.colorScheme.primary)
             },
             title = {
-                Text(text = dialogTitle)
+                Text(text = dialogTitle, color = MaterialTheme.colorScheme.primary)
             },
             text = {
                 Text(text = dialogText)
@@ -1826,10 +1843,10 @@ class MainActivity : ComponentActivity() {
 
         AlertDialog(
             icon = {
-                Icon(icon, contentDescription = "Dialog Icon")
+                Icon(icon, contentDescription = "Dialog Icon", tint = MaterialTheme.colorScheme.primary)
             },
             title = {
-                Text(text = dialogTitle)
+                Text(text = dialogTitle, color = MaterialTheme.colorScheme.primary)
             },
             text = {
                 Column {
