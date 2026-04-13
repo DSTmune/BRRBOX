@@ -112,8 +112,10 @@ import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.formatter.ValueFormatter
 import com.github.mikephil.charting.listener.ChartTouchListener
 import com.github.mikephil.charting.listener.OnChartGestureListener
+import io.github.jan.supabase.postgrest.from
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 import java.io.File
 import java.time.Instant
 import java.time.LocalDateTime
@@ -159,6 +161,29 @@ class MainActivity : ComponentActivity() {
     private val BRRBOX_MAC = "40:84:32:01:3B:28"
 
     private lateinit var supabase: SupabaseClient
+
+    private var isAuthenticating = mutableStateOf(false)
+    private var pendingSecretKey: String? = null
+    private val currentDeviceAddress = mutableStateOf<String?>(null)
+    private val deviceAliases = mutableStateMapOf<String, String>()
+    private val ALIAS_PREFS = "brrbox_device_aliases"
+
+    private fun loadAliases() {
+        val prefs = getSharedPreferences(ALIAS_PREFS, MODE_PRIVATE)
+        prefs.all.forEach { (mac, name) ->
+            if (name is String) deviceAliases[mac] = name
+        }
+    }
+
+    private fun saveAlias(mac: String, alias: String) {
+        getSharedPreferences(ALIAS_PREFS, MODE_PRIVATE).edit().putString(mac, alias).apply()
+        deviceAliases[mac] = alias
+    }
+
+    private fun deleteAlias(mac: String) {
+        getSharedPreferences(ALIAS_PREFS, MODE_PRIVATE).edit().remove(mac).apply()
+        deviceAliases.remove(mac)
+    }
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -221,6 +246,22 @@ class MainActivity : ComponentActivity() {
             addLog("Scan failed with error code: $errorCode")
         }
     }
+
+    @Serializable
+    data class UserProfile(
+        val company_id: String?
+    )
+
+    @Serializable
+    data class DeviceRecord(
+        val id: String,
+        val secret_key: String
+    )
+
+    @Serializable
+    data class OwnedDeviceRecord(
+        val id: String
+    )
 
 // ── Data model for a scan result ────────────────────────────────────────────
 
@@ -320,7 +361,7 @@ class MainActivity : ComponentActivity() {
         override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    addLog("Connected! Discovering services...")
+                    addLog("BLE connected. Discovering services...")
                     if (ActivityCompat.checkSelfPermission(
                             this@MainActivity,
                             Manifest.permission.BLUETOOTH_CONNECT
@@ -331,6 +372,7 @@ class MainActivity : ComponentActivity() {
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     isConnecting.value = false
+                    isAuthenticating.value = false
                     isConnected.value = false
                     addLog("Disconnected from device")
                 }
@@ -340,10 +382,7 @@ class MainActivity : ComponentActivity() {
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                addLog("Connected to device, ready to send messages.")
-                simpleAlert("Connected!")
                 isConnecting.value = false
-                isConnected.value = true
 
                 gatt?.services?.forEach { service ->
                     addLog("Service: ${service.uuid}")
@@ -357,7 +396,6 @@ class MainActivity : ComponentActivity() {
 
                 if (txChar != null) {
                     gatt.setCharacteristicNotification(txChar, true)
-
                     val descriptor = txChar.getDescriptor(
                         UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
                     )
@@ -372,6 +410,50 @@ class MainActivity : ComponentActivity() {
                     addLog("Subscribed to TX notifications")
                 } else {
                     addLog("TX characteristic not found!")
+                }
+
+                val key = pendingSecretKey
+                if (key != null) {
+                    // Key available — enter authenticating state and send it after
+                    // a short delay to let the descriptor write settle.
+                    isAuthenticating.value = true
+                    addLog("Sending secret key for validation...")
+                    lifecycleScope.launch {
+                        delay(500)
+                        if (ActivityCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.BLUETOOTH_CONNECT
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            val rxService = bluetoothGatt?.getService(SERVICE_UUID)
+                            val rxChar = rxService?.getCharacteristic(RX_CHARACTERISTIC_UUID)
+                            if (rxChar != null) {
+                                val msg = "K$key\n".toByteArray()
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    bluetoothGatt?.writeCharacteristic(
+                                        rxChar,
+                                        msg,
+                                        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                                    )
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    rxChar.value = msg
+                                    @Suppress("DEPRECATION")
+                                    bluetoothGatt?.writeCharacteristic(rxChar)
+                                }
+                                addLog("Secret key sent — awaiting XAA/XA0 response")
+                            } else {
+                                addLog("Key send failed: RX characteristic not found")
+                                isAuthenticating.value = false
+                                disconnect()
+                            }
+                        }
+                    }
+                } else {
+                    // No key (direct MAC / debug path) — skip auth and mark connected.
+                    isConnected.value = true
+                    addLog("No secret key provided — skipping auth (debug mode)")
+                    simpleAlert("Connected!")
                 }
 
             } else {
@@ -415,10 +497,31 @@ class MainActivity : ComponentActivity() {
     private fun processMessage(message: String) {
         addLog("From BRRBOX: $message")
 
-        if (message.matches(Regex("X[0-9A-Fa-f]{2}")))
-        {
-            val byte = message.removePrefix("X").toByte()
-            when (byte.toInt() and 0xFF) {
+        if (message.matches(Regex("X[0-9A-Fa-f]{2}"))) {
+            // Parse the two hex digits directly — the original used .toByte() which
+            // mis-parses anything above 0x09 and throws on A-F characters.
+            val code = message.removePrefix("X").toInt(16) and 0xFF
+            when (code) {
+                0xAA -> {
+                    // Secret key accepted — device is now ready for commands.
+                    isAuthenticating.value = false
+                    isConnected.value = true
+                    addLog("Secret key accepted — device ready.")
+                    simpleAlert("Connected!")
+                }
+                0xA0 -> {
+                    // Secret key rejected — BRRBOX will also force-disconnect on its end.
+                    isAuthenticating.value = false
+                    addLog("Secret key rejected by BRRBOX.")
+                    simpleAlert("Authentication failed: invalid key.")
+                    disconnect()
+                }
+                0xA1 -> {
+                    // BRRBOX is still in the waiting-for-key state, which means our
+                    // key write may not have arrived yet. Log it; the send path already
+                    // handles retries if needed.
+                    addLog("BRRBOX waiting for secret key (XA1 — key may not have arrived yet).")
+                }
                 0x00 -> simpleAlert("Message received!")
                 0x01 -> simpleAlert("Connected to BRRBOX!")
                 0x02 -> simpleAlert("Device locked successfully.")
@@ -435,7 +538,7 @@ class MainActivity : ComponentActivity() {
                 }
                 0xE0 -> simpleAlert("Error received from BRRBOX.")
                 0xE1 -> simpleAlert("Error received from BRRBOX: No logging data available!")
-                else -> addLog("Unknown status code: 0x${byte.toInt().and(0xFF).toString(16).uppercase()}")
+                else -> addLog("Unknown status code: 0x${code.toString(16).uppercase()}")
             }
             return
         }
@@ -804,7 +907,10 @@ class MainActivity : ComponentActivity() {
     }
     @Composable
     fun BluetoothScreen(modifier: Modifier = Modifier) {
-        Scaffold (
+        val scope = rememberCoroutineScope()
+        var deviceToRename by remember { mutableStateOf<ScannedDevice?>(null) }
+
+        Scaffold(
             modifier = Modifier.fillMaxSize()
         ) { contentPadding ->
             Column(
@@ -823,8 +929,19 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.primary
                 )
 
-                Text(if (currentDeviceName.value != null && isConnected.value) "Connected to ${currentDeviceName.value}" else "Not connected",
-                )
+                val statusText = when {
+                    isConnected.value -> {
+                        val alias = currentDeviceAddress.value?.let { deviceAliases[it] }
+                        "Connected to ${alias ?: currentDeviceName.value ?: "BRRBOX"}"
+                    }
+                    isAuthenticating.value -> {
+                        val alias = currentDeviceAddress.value?.let { deviceAliases[it] }
+                        "Authenticating with ${alias ?: currentDeviceName.value ?: "BRRBOX"}..."
+                    }
+                    isConnecting.value -> "Connecting..."
+                    else -> "Not connected"
+                }
+                Text(statusText)
 
                 Spacer(modifier = Modifier.height(24.dp))
 
@@ -845,23 +962,58 @@ class MainActivity : ComponentActivity() {
                         Text("Scan for BRRBOX")
                     }
                 }
+
                 LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp),
                     contentPadding = PaddingValues(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(discoveredBRRBOXList) { item ->
                         ListRow(
                             item = item,
+                            displayName = deviceAliases[item.address]
+                                ?: item.advertisedName
+                                ?: "Unnamed BRRBOX",
                             onTopButtonClick = {
-                                currentDeviceName.value = item.advertisedName
-                                connectToMacAddress(item.address)
+                                scope.launch {
+                                    val allowed = validateAndConnect(item)
+                                    if (allowed) {
+                                        currentDeviceName.value = item.advertisedName
+                                        currentDeviceAddress.value = item.address
+                                        connectToMacAddress(item.address)
+                                    }
+                                }
                             },
-                            onBottomButtonClick = { simpleAlert("Coming Soon!") }
+                            onBottomButtonClick = {
+                                deviceToRename = item
+                            }
                         )
                     }
                 }
             }
+        }
+
+        // Rename dialog — shown when the user taps Rename on a list row.
+        // Saving a blank name removes the alias and reverts to the advertised name.
+        deviceToRename?.let { device ->
+            GlobalTextInputDialog(
+                onDismissRequest = { deviceToRename = null },
+                onConfirmation = { newName ->
+                    if (newName.isBlank()) deleteAlias(device.address)
+                    else saveAlias(device.address, newName)
+                    deviceToRename = null
+                },
+                dialogTitle = "Rename BRRBOX",
+                dialogText = "Enter a local nickname for this BRRBOX. Leave blank to reset to its default name.",
+                confirmText = "Save",
+                dismissText = "Cancel",
+                icon = Icons.Default.Kitchen,
+                defaultText = deviceAliases[device.address] ?: device.advertisedName ?: "",
+                validationRegex = Regex("^[\\w\\- ]*$"),
+                errorMessage = "Use only letters, numbers, spaces, hyphens, or underscores."
+            )
         }
     }
     @Composable
@@ -1235,6 +1387,7 @@ class MainActivity : ComponentActivity() {
         val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
 
+        loadAliases()
         requestBluetoothPermissions()
 
         setContent {
@@ -1242,7 +1395,6 @@ class MainActivity : ComponentActivity() {
                 MainScreen()
             }
         }
-
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -1409,6 +1561,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun ListRow(
         item: ScannedDevice,
+        displayName: String,
         onTopButtonClick: () -> Unit,
         onBottomButtonClick: () -> Unit
     ) {
@@ -1422,7 +1575,7 @@ class MainActivity : ComponentActivity() {
         ) {
             Icon(
                 imageVector = Icons.Default.Kitchen,
-                contentDescription = item.advertisedName,
+                contentDescription = displayName,
                 modifier = Modifier.size(36.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
@@ -1430,7 +1583,7 @@ class MainActivity : ComponentActivity() {
             Spacer(modifier = Modifier.width(12.dp))
 
             Text(
-                text = item.advertisedName ?: "Unnamed BRRBOX",
+                text = displayName,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyLarge
             )
@@ -1444,7 +1597,7 @@ class MainActivity : ComponentActivity() {
                     onClick = onTopButtonClick,
                     modifier = Modifier.height(30.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                    enabled = !isConnected.value
+                    enabled = !isConnected.value && !isAuthenticating.value && !isConnecting.value
                 ) {
                     Text("Connect", style = MaterialTheme.typography.labelSmall)
                 }
@@ -1452,7 +1605,9 @@ class MainActivity : ComponentActivity() {
                     onClick = onBottomButtonClick,
                     modifier = Modifier.height(30.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary
+                    )
                 ) {
                     Text("Rename", style = MaterialTheme.typography.labelSmall)
                 }
@@ -1461,8 +1616,16 @@ class MainActivity : ComponentActivity() {
     }
 
     fun debugConnect() {
-        isConnected.value = !isConnected.value
-        addLog(if (isConnected.value) "Debug Mode - Connected (Fake)" else "Debug Mode - Disconnected")
+        if (isConnected.value) {
+            isConnected.value = false
+            isAuthenticating.value = false
+            addLog("Debug Mode - Disconnected")
+        } else {
+            // Jump straight to connected — no auth handshake in debug mode.
+            isConnected.value = true
+            isAuthenticating.value = false
+            addLog("Debug Mode - Connected (fake, auth skipped)")
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -2065,6 +2228,85 @@ class MainActivity : ComponentActivity() {
         chart.invalidate()
     }
 
+    private suspend fun validateAndConnect(item: ScannedDevice): Boolean {
+        // ── Step 1: Require the user to be signed in ─────────────────────────────
+        val user = supabase.auth.currentUserOrNull()
+        if (user == null) {
+            simpleAlert("You must be signed in to connect to a BRRBOX.")
+            addLog("Connection blocked: user not signed in.")
+            return false
+        }
+
+        // ── Step 2: Fetch the user's company_id from public.users ────────────────
+        val userProfile = try {
+            supabase.from("users")
+                .select { filter { eq("id", user.id) } }
+                .decodeSingleOrNull<UserProfile>()
+        } catch (e: Exception) {
+            simpleAlert("Failed to fetch your account profile.")
+            addLog("validateAndConnect: user profile error — ${e.message}")
+            return false
+        }
+
+        val companyId = userProfile?.company_id
+        if (companyId == null) {
+            simpleAlert("Your account is not linked to a company. Contact your administrator.")
+            addLog("Connection blocked: user has no company_id.")
+            return false
+        }
+
+        // ── Step 3: Look up the device by advertised name in the devices table ───
+        val deviceName = item.advertisedName
+        if (deviceName == null) {
+            simpleAlert("This BRRBOX has no advertised name and cannot be verified.")
+            addLog("Connection blocked: device has no advertised name.")
+            return false
+        }
+
+        val deviceRecord = try {
+            supabase.from("devices")
+                .select { filter { eq("device_name", deviceName) } }
+                .decodeSingleOrNull<DeviceRecord>()
+        } catch (e: Exception) {
+            simpleAlert("Failed to look up this BRRBOX in the database.")
+            addLog("validateAndConnect: device lookup error — ${e.message}")
+            return false
+        }
+
+        if (deviceRecord == null) {
+            simpleAlert("This BRRBOX ($deviceName) is not registered in the system.")
+            addLog("Connection blocked: device \"$deviceName\" not found in devices table.")
+            return false
+        }
+
+        // ── Step 4: Verify ownership via owned_devices ───────────────────────────
+        val owned = try {
+            supabase.from("owned_devices")
+                .select {
+                    filter {
+                        eq("company_id", companyId)
+                        eq("device_id", deviceRecord.id)
+                    }
+                }
+                .decodeSingleOrNull<OwnedDeviceRecord>()
+        } catch (e: Exception) {
+            simpleAlert("Failed to verify device ownership.")
+            addLog("validateAndConnect: owned_devices error — ${e.message}")
+            return false
+        }
+
+        if (owned == null) {
+            simpleAlert("Your company does not have access to this BRRBOX.")
+            addLog("Connection blocked: no owned_devices match for company=$companyId, device=${deviceRecord.id}.")
+            return false
+        }
+
+        // ── Step 5: Cache the secret key — sent to the device after BLE connects ─
+        pendingSecretKey = deviceRecord.secret_key
+        addLog("Ownership verified for \"$deviceName\". Secret key cached. Proceeding to connect.")
+        return true
+    }
+
     fun disconnect() {
         if (ActivityCompat.checkSelfPermission(
                 this,
@@ -2079,6 +2321,8 @@ class MainActivity : ComponentActivity() {
         bluetoothGatt?.close()
         bluetoothGatt = null
         isConnected.value = false
+        isAuthenticating.value = false
+        pendingSecretKey = null
         addLog("Disconnected")
     }
 
