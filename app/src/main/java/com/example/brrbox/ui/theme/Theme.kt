@@ -20,8 +20,8 @@ private val DarkColorScheme = darkColorScheme(
     
     secondary = BrrBoxMediumBlue,
     onSecondary = BrrBoxDarkGrey,
-    secondaryContainer = BrrBoxBlue.copy(alpha = 0.2f), // Selected tab background
-    onSecondaryContainer = BrrBoxBlue, // Selected tab icon/label
+    secondaryContainer = BrrBoxBlue.copy(alpha = 0.3f), // Selected tab pill
+    onSecondaryContainer = Color.White, // Selected tab icon/label
     
     tertiary = BrrBoxSkyBlue,
     onTertiary = BrrBoxDarkGrey,
@@ -32,8 +32,12 @@ private val DarkColorScheme = darkColorScheme(
     surface = BrrBoxDarkGrey,
     onSurface = BrrBoxWhiteBlue,
     
-    surfaceVariant = Color(0xFF45494C), // Slightly lighter grey for cards/fields
+    surfaceVariant = Color(0xFF45494C),
     onSurfaceVariant = BrrBoxBlue,
+    
+    // Bottom Navigation Bar accent (Darker than background)
+    surfaceContainer = Color(0xFF1E2124), 
+    surfaceContainerHigh = Color(0xFF2A2D31),
     
     outline = BrrBoxMediumBlue,
     inverseSurface = BrrBoxWhiteBlue,
@@ -49,8 +53,8 @@ private val LightColorScheme = lightColorScheme(
     
     secondary = BrrBoxDeepBlue,
     onSecondary = Color.White,
-    secondaryContainer = BrrBoxDarkGrey.copy(alpha = 0.1f),
-    onSecondaryContainer = BrrBoxDarkGrey,
+    secondaryContainer = BrrBoxDeepBlue.copy(alpha = 0.2f), // Selected tab pill
+    onSecondaryContainer = BrrBoxDeepBlue,
     
     tertiary = BrrBoxMediumBlue,
     onTertiary = Color.White,
@@ -63,6 +67,10 @@ private val LightColorScheme = lightColorScheme(
     
     surfaceVariant = BrrBoxBlue.copy(alpha = 0.3f),
     onSurfaceVariant = BrrBoxDarkGrey,
+    
+    // Bottom Navigation Bar accent (Using Light Blue variant)
+    surfaceContainer = BrrBoxLightBlue, 
+    surfaceContainerHigh = BrrBoxBlue.copy(alpha = 0.2f),
     
     outline = BrrBoxDeepBlue
 )
