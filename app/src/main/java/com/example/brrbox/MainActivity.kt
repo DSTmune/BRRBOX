@@ -1757,23 +1757,51 @@ class MainActivity : ComponentActivity() {
         onDismiss: () -> Unit,
         onConfirm: (String) -> Unit
     ) {
+        val MIN_CELSIUS = -28.889f   // −20 °F
+        val MAX_CELSIUS =  26.667f   //  80 °F
+
         val radioOptions = listOf("°F", "°C")
-        // Seed from the app-wide preference instead of always defaulting to °F
         val (selectedOption, onOptionSelected) = remember { mutableStateOf(defaultTempUnit.value) }
         val focusManager = LocalFocusManager.current
         val keyboardController = LocalSoftwareKeyboardController.current
-
         var isRangeMode by remember { mutableStateOf(false) }
 
-        // Default display values reflect the preferred unit
-        var singleTemp by remember {
-            mutableStateOf(if (defaultTempUnit.value == "°F") "32" else "0")
-        }
-        var minTemp by remember {
-            mutableStateOf(if (defaultTempUnit.value == "°F") "32" else "0")
-        }
-        var maxTemp by remember {
-            mutableStateOf(if (defaultTempUnit.value == "°F") "33" else "1")
+        val seedSingle = if (defaultTempUnit.value == "°F") "32" else "0"
+        val seedMin    = if (defaultTempUnit.value == "°F") "-20" else "-29"
+        val seedMax    = if (defaultTempUnit.value == "°F") "70"  else "21"
+
+        var singleTemp by remember { mutableStateOf(seedSingle) }
+        var minTemp    by remember { mutableStateOf(seedMin) }
+        var maxTemp    by remember { mutableStateOf(seedMax) }
+
+        fun toCelsius(value: Float): Float =
+            if (selectedOption == "°F") (value - 32f) * 5f / 9f else value
+
+        val minAllowedDisplay = if (selectedOption == "°F") -20f else MIN_CELSIUS
+        val maxAllowedDisplay = if (selectedOption == "°F")  80f else MAX_CELSIUS
+        val limitLabel        = if (selectedOption == "°F") "-20 °F to 80 °F" else
+            "${String.format(Locale.US, "%.1f", MIN_CELSIUS)} °C " +
+                    "to ${String.format(Locale.US, "%.1f", MAX_CELSIUS)} °C"
+
+        fun Float.isInRange() = this in minAllowedDisplay..maxAllowedDisplay
+
+        val singleVal = singleTemp.toFloatOrNull()
+        val minVal    = minTemp.toFloatOrNull()
+        val maxVal    = maxTemp.toFloatOrNull()
+
+        // Per-field errors
+        val singleOutOfRange = singleVal != null && !singleVal.isInRange()
+        val minOutOfRange    = minVal    != null && !minVal.isInRange()
+        val maxOutOfRange    = maxVal    != null && !maxVal.isInRange()
+        val rangeOrderError  = !isRangeMode.not() &&   // only in range mode
+                minVal != null && maxVal != null &&
+                !minOutOfRange && !maxOutOfRange &&
+                minVal >= maxVal
+
+        val confirmEnabled = when {
+            isRangeMode  -> minVal  != null && maxVal  != null &&
+                    !minOutOfRange && !maxOutOfRange && !rangeOrderError
+            else         -> singleVal != null && !singleOutOfRange
         }
 
         fun formatSigned(value: Float): String {
@@ -1781,16 +1809,13 @@ class MainActivity : ComponentActivity() {
             return "$sign%05.1f".format(Math.abs(value))
         }
 
-        fun toCelsius(value: Float): Float =
-            if (selectedOption == "°F") (value - 32f) * 5f / 9f else value
-
         fun buildCommand(): String {
             return if (isRangeMode) {
-                val lo = toCelsius(minTemp.toFloatOrNull() ?: 0f)
-                val hi = toCelsius(maxTemp.toFloatOrNull() ?: 0f)
+                val lo = toCelsius(minVal!!)
+                val hi = toCelsius(maxVal!!)
                 "T${formatSigned(lo)}${formatSigned(hi)}"
             } else {
-                val t = toCelsius(singleTemp.toFloatOrNull() ?: 0f)
+                val t = toCelsius(singleVal!!)
                 "T${formatSigned(t - 0.1f)}${formatSigned(t + 0.1f)}"
             }
         }
@@ -1802,12 +1827,9 @@ class MainActivity : ComponentActivity() {
                 return String.format(Locale.US, "%.1f", converted)
             }
             singleTemp = conv(singleTemp)
-            minTemp = conv(minTemp)
-            maxTemp = conv(maxTemp)
+            minTemp    = conv(minTemp)
+            maxTemp    = conv(maxTemp)
         }
-
-        val rangeInvalid = isRangeMode &&
-                (minTemp.toFloatOrNull() ?: 0f) >= (maxTemp.toFloatOrNull() ?: 0f)
 
         Dialog(
             onDismissRequest = onDismiss,
@@ -1840,6 +1862,7 @@ class MainActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.primary
                         )
 
+                        // Single / Range toggle
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1865,10 +1888,26 @@ class MainActivity : ComponentActivity() {
                         if (!isRangeMode) {
                             OutlinedTextField(
                                 value = singleTemp,
-                                onValueChange = { if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$"))) singleTemp = it },
+                                onValueChange = {
+                                    if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$")))
+                                        singleTemp = it
+                                },
                                 label = { Text("Temperature") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide(); focusManager.clearFocus() }),
+                                isError = singleOutOfRange,
+                                supportingText = {
+                                    if (singleOutOfRange)
+                                        Text(
+                                            "Must be between $limitLabel",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                },
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Decimal,
+                                    imeAction = ImeAction.Done
+                                ),
+                                keyboardActions = KeyboardActions(onDone = {
+                                    keyboardController?.hide(); focusManager.clearFocus()
+                                }),
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -1880,28 +1919,60 @@ class MainActivity : ComponentActivity() {
                         } else {
                             OutlinedTextField(
                                 value = minTemp,
-                                onValueChange = { if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$"))) minTemp = it },
+                                onValueChange = {
+                                    if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$")))
+                                        minTemp = it
+                                },
                                 label = { Text("Min Temperature") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                                isError = minOutOfRange || rangeOrderError,
+                                supportingText = {
+                                    when {
+                                        minOutOfRange -> Text(
+                                            "Must be between $limitLabel",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                },
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Decimal,
+                                    imeAction = ImeAction.Next
+                                ),
                                 singleLine = true,
-                                isError = rangeInvalid,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             OutlinedTextField(
                                 value = maxTemp,
-                                onValueChange = { if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$"))) maxTemp = it },
-                                label = { Text("Max Temperature") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide(); focusManager.clearFocus() }),
-                                singleLine = true,
-                                isError = rangeInvalid,
-                                supportingText = {
-                                    if (rangeInvalid) Text("Max must be greater than Min", color = MaterialTheme.colorScheme.error)
+                                onValueChange = {
+                                    if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$")))
+                                        maxTemp = it
                                 },
+                                label = { Text("Max Temperature") },
+                                isError = maxOutOfRange || rangeOrderError,
+                                supportingText = {
+                                    when {
+                                        maxOutOfRange  -> Text(
+                                            "Must be between $limitLabel",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        rangeOrderError -> Text(
+                                            "Max must be greater than min",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                },
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Decimal,
+                                    imeAction = ImeAction.Done
+                                ),
+                                keyboardActions = KeyboardActions(onDone = {
+                                    keyboardController?.hide(); focusManager.clearFocus()
+                                }),
+                                singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
 
+                        // °F / °C radio group
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1942,7 +2013,7 @@ class MainActivity : ComponentActivity() {
                             TextButton(onClick = onDismiss) { Text("Cancel") }
                             TextButton(
                                 onClick = { onConfirm(buildCommand()) },
-                                enabled = !rangeInvalid
+                                enabled = confirmEnabled
                             ) { Text("Set") }
                         }
                     }
