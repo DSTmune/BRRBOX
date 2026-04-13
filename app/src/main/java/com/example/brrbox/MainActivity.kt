@@ -355,7 +355,8 @@ class MainActivity : ComponentActivity() {
                     serviceUuids      = serviceUuids
                 )
 
-                if(scanned.manufacturerName == "BRRBOX") {
+                if (scanned.manufacturerName == "BRRBOX" && !discoveredBRRBOXList.any { it.advertisedName == scanned.advertisedName }) {
+
                     discoveredBRRBOXList.add(scanned)
                     addLog("DISCOVERED A BRRBOX!")
                 }
@@ -1765,8 +1766,8 @@ class MainActivity : ComponentActivity() {
         onDismiss: () -> Unit,
         onConfirm: (String) -> Unit
     ) {
-        val MIN_CELSIUS = -28.889f   // −20 °F
-        val MAX_CELSIUS =  26.667f   //  80 °F
+        val MIN_CELSIUS = -30f   // −22 °F
+        val MAX_CELSIUS =  40f   //  104 °F
 
         val radioOptions = listOf("°F", "°C")
         val (selectedOption, onOptionSelected) = remember { mutableStateOf(defaultTempUnit.value) }
@@ -1785,9 +1786,9 @@ class MainActivity : ComponentActivity() {
         fun toCelsius(value: Float): Float =
             if (selectedOption == "°F") (value - 32f) * 5f / 9f else value
 
-        val minAllowedDisplay = if (selectedOption == "°F") -20f else MIN_CELSIUS
-        val maxAllowedDisplay = if (selectedOption == "°F")  80f else MAX_CELSIUS
-        val limitLabel        = if (selectedOption == "°F") "-20 °F to 80 °F" else
+        val minAllowedDisplay = if (selectedOption == "°F") -22f else MIN_CELSIUS
+        val maxAllowedDisplay = if (selectedOption == "°F")  104f else MAX_CELSIUS
+        val limitLabel        = if (selectedOption == "°F") "-22 °F to 104 °F" else
             "${String.format(Locale.US, "%.1f", MIN_CELSIUS)} °C " +
                     "to ${String.format(Locale.US, "%.1f", MAX_CELSIUS)} °C"
 
