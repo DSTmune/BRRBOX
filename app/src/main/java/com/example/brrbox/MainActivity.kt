@@ -55,7 +55,7 @@ import androidx.compose.material.icons.filled.Kitchen
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -73,6 +73,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -81,6 +83,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -167,6 +170,19 @@ class MainActivity : ComponentActivity() {
     private val currentDeviceAddress = mutableStateOf<String?>(null)
     private val deviceAliases = mutableStateMapOf<String, String>()
     private val ALIAS_PREFS = "brrbox_device_aliases"
+
+    private val TEMP_PREFS = "brrbox_temp_prefs"
+    private var defaultTempUnit = mutableStateOf("°F")
+
+    private fun loadTempUnit() {
+        val prefs = getSharedPreferences(TEMP_PREFS, MODE_PRIVATE)
+        defaultTempUnit.value = prefs.getString("temp_unit", "°F") ?: "°F"
+    }
+
+    private fun saveTempUnit(unit: String) {
+        getSharedPreferences(TEMP_PREFS, MODE_PRIVATE).edit().putString("temp_unit", unit).apply()
+        defaultTempUnit.value = unit
+    }
 
     private fun loadAliases() {
         val prefs = getSharedPreferences(ALIAS_PREFS, MODE_PRIVATE)
@@ -659,7 +675,7 @@ class MainActivity : ComponentActivity() {
                     temperatureCelsius = currentTempCelsius.value,
                     minTemp = -20f,
                     maxTemp = 50f,
-                    useFahrenheit = true,
+                    useFahrenheit = defaultTempUnit.value == "°F",
                     thermometerHeight = 350.dp
                 )
             }
@@ -676,7 +692,15 @@ class MainActivity : ComponentActivity() {
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun TempDataScreen(modifier: Modifier = Modifier) {
+        // logEntries is always in Celsius — convert visually only
         val entries = logEntries.toList()
+        val useFahrenheit = defaultTempUnit.value == "°F"
+        val unitLabel = if (useFahrenheit) "°F" else "°C"
+        val displayEntries = if (useFahrenheit)
+            entries.map { Entry(it.x, it.y * 9f / 5f + 32f) }
+        else
+            entries
+
         Scaffold(
             modifier = Modifier.fillMaxSize()
         ) { contentPadding ->
@@ -699,7 +723,6 @@ class MainActivity : ComponentActivity() {
 
                 AndroidView(
                     factory = { context ->
-
                         LineChart(context).apply {
                             xAxis.apply {
                                 position = XAxis.XAxisPosition.BOTTOM
@@ -720,14 +743,8 @@ class MainActivity : ComponentActivity() {
                             axisLeft.apply {
                                 textColor = android.graphics.Color.GRAY
                                 gridColor = android.graphics.Color.LTGRAY
-                                axisMinimum = 10f
-                                axisMaximum = 32f
                                 granularity = 0.1f
                                 isGranularityEnabled = true
-                                valueFormatter = object : ValueFormatter() {
-                                    override fun getFormattedValue(value: Float) =
-                                        if (value % 1f == 0f) "${value.toInt()}°C" else "${"%.1f".format(value)}°C"
-                                }
                             }
 
                             axisRight.isEnabled = false
@@ -762,7 +779,14 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     update = { chart ->
-                        val dataSet = LineDataSet(entries, "Temperature (°C)").apply {
+                        // Y-axis formatter uses the current display unit
+                        chart.axisLeft.valueFormatter = object : ValueFormatter() {
+                            override fun getFormattedValue(value: Float) =
+                                if (value % 1f == 0f) "${value.toInt()}$unitLabel"
+                                else "${"%.1f".format(value)}$unitLabel"
+                        }
+
+                        val dataSet = LineDataSet(displayEntries, "Temperature ($unitLabel)").apply {
                             color = "#1C86FF".toColorInt()
                             setCircleColor("#1C86FF".toColorInt())
                             circleRadius = 3f
@@ -775,14 +799,16 @@ class MainActivity : ComponentActivity() {
                             fillAlpha = 40
                             mode = LineDataSet.Mode.CUBIC_BEZIER
                         }
-                        if (entries.isNotEmpty()) {
-                            val minTemp = entries.minOf { it.y }
-                            val maxTemp = entries.maxOf { it.y }
-                            val maxX = entries.maxOf { it.x }
 
+                        if (displayEntries.isNotEmpty()) {
+                            val minDisplayTemp = displayEntries.minOf { it.y }
+                            val maxDisplayTemp = displayEntries.maxOf { it.y }
+                            val maxX = displayEntries.maxOf { it.x }
+
+                            // Sensible default bounds: pad 10 degrees, floor/ceil in the display unit
                             chart.axisLeft.apply {
-                                axisMinimum = minOf(minTemp - 10f, 0f)
-                                axisMaximum = maxOf(maxTemp + 10f, 30f)
+                                axisMinimum = minOf(minDisplayTemp - 10f, if (useFahrenheit) 32f else 0f)
+                                axisMaximum = maxOf(maxDisplayTemp + 10f, if (useFahrenheit) 86f else 30f)
                             }
 
                             chart.xAxis.apply {
@@ -799,6 +825,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
+
                         chart.data = LineData(dataSet)
                         chart.notifyDataSetChanged()
                         chart.invalidate()
@@ -820,18 +847,14 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Button(
-                        onClick = {
-                            showLoggingDialog.value = true
-                        },
+                        onClick = { showLoggingDialog.value = true },
                         modifier = Modifier.weight(12f)
                     ) {
                         Text("Get Logging Data")
                     }
                     Spacer(modifier = Modifier.weight(1f))
                     Button(
-                        onClick = {
-                            showSaveDialog.value = true
-                        },
+                        onClick = { showSaveDialog.value = true },
                         enabled = logEntries.isNotEmpty(),
                         modifier = Modifier.weight(12f)
                     ) {
@@ -840,6 +863,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
         if (showLoggingDialog.value) {
             GlobalAlertDialog(
                 {
@@ -849,16 +873,13 @@ class MainActivity : ComponentActivity() {
                 {
                     showLoggingDialog.value = false
                     if (bluetoothGatt == null && isConnected.value) {
-                        // debug case with fake data
                         logEntries.clear()
-
                         val intervalsPerDay = 24 * 6
-
                         repeat(intervalsPerDay) { index ->
                             val minutes = index * 10
                             val xValue = minutes / 60f
+                            // Fake data generated in Celsius — matches real device data
                             val yValue = (4f + Math.sin(index * 0.3) * 1.5f + (Math.random() - 0.5f) * 0.8f).toFloat()
-
                             logEntries.add(Entry(xValue, yValue))
                         }
                     } else {
@@ -872,6 +893,7 @@ class MainActivity : ComponentActivity() {
                 Icons.Default.FileOpen
             )
         }
+
         if (showSaveDialog.value) {
             val time = LocalDateTime.now()
             GlobalTextInputDialog(
@@ -879,11 +901,10 @@ class MainActivity : ComponentActivity() {
                 onConfirmation = { name ->
                     var fileName = name
                     showSaveDialog.value = false
-                    if (!fileName.endsWith(".csv")) {
-                        fileName = "$fileName.csv"
-                    }
-                    val file = File(getExternalFilesDir(null),fileName)
+                    if (!fileName.endsWith(".csv")) fileName = "$fileName.csv"
+                    val file = File(getExternalFilesDir(null), fileName)
                     file.printWriter().use { out ->
+                        // CSV is always written in Celsius regardless of display preference
                         out.println(listOf("Elapsed Time", "Temperature (°C)").joinToString(","))
                         logEntries.forEach { entry ->
                             out.println(listOf(entry.x.toString(), entry.y.toString()).joinToString(","))
@@ -901,8 +922,12 @@ class MainActivity : ComponentActivity() {
                 errorMessage = "Invalid file name. Avoid special characters like / \\ : * ? \" < > |",
             )
         }
+
         if (showGetSavedLogDialog.value) {
-            GetSavedLogDialog({showGetSavedLogDialog.value = false},{showGetSavedLogDialog.value = false})
+            GetSavedLogDialog(
+                { showGetSavedLogDialog.value = false },
+                { showGetSavedLogDialog.value = false }
+            )
         }
     }
     @Composable
@@ -1055,7 +1080,18 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.primary
                 )
 
-                Text(if (currentLogin.value != null) "Signed in as ${currentLogin.value}" else "Not signed in")
+                Text(
+                    buildAnnotatedString {
+                        if (currentLogin.value != null) {
+                            append("Signed in as ")
+                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                append(currentLogin.value!!)
+                            }
+                        } else {
+                            append("Not signed in")
+                        }
+                    }
+                )
 
                 Spacer(modifier = Modifier.height(48.dp))
 
@@ -1216,8 +1252,10 @@ class MainActivity : ComponentActivity() {
     }
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
-    fun DebugScreen(modifier: Modifier = Modifier) {
+    fun SettingsScreen(modifier: Modifier = Modifier) {
         var command by remember { mutableStateOf("") }
+        val tempOptions = listOf("°F", "°C")
+
         Scaffold(
             modifier = Modifier.fillMaxSize()
         ) { contentPadding ->
@@ -1230,12 +1268,60 @@ class MainActivity : ComponentActivity() {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    "Debug",
+                    "Settings",
                     fontSize = 36.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
+
+                Text(
+                    "Default Temperature",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectableGroup(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    tempOptions.forEach { option ->
+                        Row(
+                            Modifier
+                                .height(48.dp)
+                                .selectable(
+                                    selected = (option == defaultTempUnit.value),
+                                    onClick = { saveTempUnit(option) },
+                                    role = Role.RadioButton
+                                )
+                                .padding(end = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = (option == defaultTempUnit.value),
+                                onClick = null
+                            )
+                            Text(
+                                text = option,
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    "Debug Commands",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Row(
                     modifier = Modifier
@@ -1287,17 +1373,11 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Text(
-                    "Custom Commands",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-
                 OutlinedTextField(
                     value = command,
                     onValueChange = { command = it },
                     singleLine = true,
-                    label = { Text("Command...") },
+                    label = { Text("Custom Command...") },
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -1311,6 +1391,7 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // ── Debug Logs ───────────────────────────────────────────────────────
                 Text(
                     "Debug Logs",
                     fontSize = 24.sp,
@@ -1349,9 +1430,7 @@ class MainActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Button(
-                    onClick = {
-                        debugLog.value = mutableListOf()
-                    },
+                    onClick = { debugLog.value = mutableListOf() },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error
@@ -1373,7 +1452,7 @@ class MainActivity : ComponentActivity() {
         TEMPDATA("data", "Logs",Icons.Default.Archive,"View Temperature Logs"),
         BLUETOOTH("bluetooth", "Bluetooth",Icons.Default.Bluetooth,"Bluetooth Connection"),
         LOGIN("login", "Account", Icons.Default.AccountCircle,"Login to User Account"),
-        DEBUG("debug", "Debug",Icons.Default.Terminal,"Debug Logs"),
+        SETTINGS("settings", "Settings",Icons.Default.Settings,"Settings Page"),
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -1421,7 +1500,7 @@ class MainActivity : ComponentActivity() {
                         Destination.TEMPDATA -> TempDataScreen()
                         Destination.BLUETOOTH -> BluetoothScreen()
                         Destination.LOGIN -> LoginScreen()
-                        Destination.DEBUG -> DebugScreen()
+                        Destination.SETTINGS -> SettingsScreen()
                     }
                 }
             }
@@ -1679,14 +1758,23 @@ class MainActivity : ComponentActivity() {
         onConfirm: (String) -> Unit
     ) {
         val radioOptions = listOf("°F", "°C")
-        val (selectedOption, onOptionSelected) = remember { mutableStateOf(radioOptions[0]) }
+        // Seed from the app-wide preference instead of always defaulting to °F
+        val (selectedOption, onOptionSelected) = remember { mutableStateOf(defaultTempUnit.value) }
         val focusManager = LocalFocusManager.current
         val keyboardController = LocalSoftwareKeyboardController.current
 
         var isRangeMode by remember { mutableStateOf(false) }
-        var singleTemp by remember { mutableStateOf("32") }
-        var minTemp by remember { mutableStateOf("32") }
-        var maxTemp by remember { mutableStateOf("33") }
+
+        // Default display values reflect the preferred unit
+        var singleTemp by remember {
+            mutableStateOf(if (defaultTempUnit.value == "°F") "32" else "0")
+        }
+        var minTemp by remember {
+            mutableStateOf(if (defaultTempUnit.value == "°F") "32" else "0")
+        }
+        var maxTemp by remember {
+            mutableStateOf(if (defaultTempUnit.value == "°F") "33" else "1")
+        }
 
         fun formatSigned(value: Float): String {
             val sign = if (value >= 0f) "+" else "-"
