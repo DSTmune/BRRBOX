@@ -38,11 +38,13 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AcUnit
 import androidx.compose.material.icons.filled.AccountCircle
@@ -53,7 +55,7 @@ import androidx.compose.material.icons.filled.Kitchen
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Save
-import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -71,6 +73,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -79,6 +83,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -86,11 +91,19 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.ActivityCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import com.example.brrbox.ui.theme.BRRBOXTheme
 import com.github.mikephil.charting.data.LineDataSet
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.providers.builtin.Email
+import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.postgrest.Postgrest
 import java.util.Locale
 import java.util.UUID
 import androidx.core.graphics.toColorInt
@@ -102,7 +115,10 @@ import com.github.mikephil.charting.data.LineData
 import com.github.mikephil.charting.formatter.ValueFormatter
 import com.github.mikephil.charting.listener.ChartTouchListener
 import com.github.mikephil.charting.listener.OnChartGestureListener
+import io.github.jan.supabase.postgrest.from
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
 import java.io.File
 import java.time.Instant
 import java.time.LocalDateTime
@@ -146,6 +162,44 @@ class MainActivity : ComponentActivity() {
     // To be removed.
     private var BRRBOX_MAC_SEARCHING = ""
     private val BRRBOX_MAC = "40:84:32:01:3B:28"
+
+    private lateinit var supabase: SupabaseClient
+
+    private var isAuthenticating = mutableStateOf(false)
+    private var pendingSecretKey: String? = null
+    private val currentDeviceAddress = mutableStateOf<String?>(null)
+    private val deviceAliases = mutableStateMapOf<String, String>()
+    private val ALIAS_PREFS = "brrbox_device_aliases"
+
+    private val TEMP_PREFS = "brrbox_temp_prefs"
+    private var defaultTempUnit = mutableStateOf("°F")
+
+    private fun loadTempUnit() {
+        val prefs = getSharedPreferences(TEMP_PREFS, MODE_PRIVATE)
+        defaultTempUnit.value = prefs.getString("temp_unit", "°F") ?: "°F"
+    }
+
+    private fun saveTempUnit(unit: String) {
+        getSharedPreferences(TEMP_PREFS, MODE_PRIVATE).edit().putString("temp_unit", unit).apply()
+        defaultTempUnit.value = unit
+    }
+
+    private fun loadAliases() {
+        val prefs = getSharedPreferences(ALIAS_PREFS, MODE_PRIVATE)
+        prefs.all.forEach { (mac, name) ->
+            if (name is String) deviceAliases[mac] = name
+        }
+    }
+
+    private fun saveAlias(mac: String, alias: String) {
+        getSharedPreferences(ALIAS_PREFS, MODE_PRIVATE).edit().putString(mac, alias).apply()
+        deviceAliases[mac] = alias
+    }
+
+    private fun deleteAlias(mac: String) {
+        getSharedPreferences(ALIAS_PREFS, MODE_PRIVATE).edit().remove(mac).apply()
+        deviceAliases.remove(mac)
+    }
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -209,6 +263,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @Serializable
+    data class UserProfile(
+        val company_id: String?
+    )
+
+    @Serializable
+    data class DeviceRecord(
+        val id: String,
+        val secret_key: String
+    )
+
+    @Serializable
+    data class OwnedDeviceRecord(
+        val id: String
+    )
+
 // ── Data model for a scan result ────────────────────────────────────────────
 
     data class ScannedDevice(
@@ -255,7 +325,9 @@ class MainActivity : ComponentActivity() {
                 // ── Device name ──────────────────────────────────────────────────
                 // advName comes from the advertisement packet (set via SN on RNBD350).
                 // device.name is the cached system name, which may be stale — prefer advName.
-                val advName = scanRecord?.deviceName ?: device.name
+                val advName = (scanRecord?.deviceName ?: device.name)
+                    ?.trim()
+                    ?.trimEnd('\u0000')
 
                 val manufacturerData = scanRecord?.manufacturerSpecificData
                 var manufacturerId: Int?    = null
@@ -283,7 +355,8 @@ class MainActivity : ComponentActivity() {
                     serviceUuids      = serviceUuids
                 )
 
-                if(scanned.manufacturerName == "BRRBOX") {
+                if (scanned.manufacturerName == "BRRBOX" && !discoveredBRRBOXList.any { it.advertisedName == scanned.advertisedName }) {
+
                     discoveredBRRBOXList.add(scanned)
                     addLog("DISCOVERED A BRRBOX!")
                 }
@@ -307,7 +380,7 @@ class MainActivity : ComponentActivity() {
         override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    addLog("Connected! Discovering services...")
+                    addLog("BLE connected. Discovering services...")
                     if (ActivityCompat.checkSelfPermission(
                             this@MainActivity,
                             Manifest.permission.BLUETOOTH_CONNECT
@@ -318,6 +391,7 @@ class MainActivity : ComponentActivity() {
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     isConnecting.value = false
+                    isAuthenticating.value = false
                     isConnected.value = false
                     addLog("Disconnected from device")
                 }
@@ -327,10 +401,7 @@ class MainActivity : ComponentActivity() {
         @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
         override fun onServicesDiscovered(gatt: BluetoothGatt?, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
-                addLog("Connected to device, ready to send messages.")
-                simpleAlert("Connected!")
                 isConnecting.value = false
-                isConnected.value = true
 
                 gatt?.services?.forEach { service ->
                     addLog("Service: ${service.uuid}")
@@ -344,7 +415,6 @@ class MainActivity : ComponentActivity() {
 
                 if (txChar != null) {
                     gatt.setCharacteristicNotification(txChar, true)
-
                     val descriptor = txChar.getDescriptor(
                         UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
                     )
@@ -359,6 +429,50 @@ class MainActivity : ComponentActivity() {
                     addLog("Subscribed to TX notifications")
                 } else {
                     addLog("TX characteristic not found!")
+                }
+
+                val key = pendingSecretKey
+                if (key != null) {
+                    // Key available — enter authenticating state and send it after
+                    // a short delay to let the descriptor write settle.
+                    isAuthenticating.value = true
+                    addLog("Sending secret key for validation...")
+                    lifecycleScope.launch {
+                        delay(500)
+                        if (ActivityCompat.checkSelfPermission(
+                                this@MainActivity,
+                                Manifest.permission.BLUETOOTH_CONNECT
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            val rxService = bluetoothGatt?.getService(SERVICE_UUID)
+                            val rxChar = rxService?.getCharacteristic(RX_CHARACTERISTIC_UUID)
+                            if (rxChar != null) {
+                                val msg = "K$key\n".toByteArray()
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    bluetoothGatt?.writeCharacteristic(
+                                        rxChar,
+                                        msg,
+                                        BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                                    )
+                                } else {
+                                    @Suppress("DEPRECATION")
+                                    rxChar.value = msg
+                                    @Suppress("DEPRECATION")
+                                    bluetoothGatt?.writeCharacteristic(rxChar)
+                                }
+                                addLog("Secret key sent — awaiting XAA/XA0 response")
+                            } else {
+                                addLog("Key send failed: RX characteristic not found")
+                                isAuthenticating.value = false
+                                disconnect()
+                            }
+                        }
+                    }
+                } else {
+                    // No key (direct MAC / debug path) — skip auth and mark connected.
+                    isConnected.value = true
+                    addLog("No secret key provided — skipping auth (debug mode)")
+                    simpleAlert("Connected!")
                 }
 
             } else {
@@ -402,10 +516,24 @@ class MainActivity : ComponentActivity() {
     private fun processMessage(message: String) {
         addLog("From BRRBOX: $message")
 
-        if (message.matches(Regex("X[0-9A-Fa-f]{2}")))
-        {
-            val byte = message.removePrefix("X").toByte()
-            when (byte.toInt() and 0xFF) {
+        if (message.matches(Regex("X[0-9A-Fa-f]{2}"))) {
+            val code = message.removePrefix("X").toInt(16) and 0xFF
+            when (code) {
+                0xAA -> {
+                    isAuthenticating.value = false
+                    isConnected.value = true
+                    addLog("Secret key accepted — device ready.")
+                    simpleAlert("Connected!")
+                }
+                0xA0 -> {
+                    isAuthenticating.value = false
+                    addLog("Secret key rejected by BRRBOX.")
+                    simpleAlert("Authentication failed: invalid key.")
+                    disconnect()
+                }
+                0xA1 -> {
+                    addLog("BRRBOX waiting for secret key (XA1 — key may not have arrived yet).")
+                }
                 0x00 -> simpleAlert("Message received!")
                 0x01 -> simpleAlert("Connected to BRRBOX!")
                 0x02 -> simpleAlert("Device locked successfully.")
@@ -422,7 +550,7 @@ class MainActivity : ComponentActivity() {
                 }
                 0xE0 -> simpleAlert("Error received from BRRBOX.")
                 0xE1 -> simpleAlert("Error received from BRRBOX: No logging data available!")
-                else -> addLog("Unknown status code: 0x${byte.toInt().and(0xFF).toString(16).uppercase()}")
+                else -> addLog("Unknown status code: 0x${code.toString(16).uppercase()}")
             }
             return
         }
@@ -450,6 +578,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(contentPadding)
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
@@ -457,7 +586,8 @@ class MainActivity : ComponentActivity() {
                 Text(
                     "BRRBOX Controller",
                     fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.height(32.dp))
                 Row(
@@ -524,6 +654,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(contentPadding)
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
@@ -531,7 +662,8 @@ class MainActivity : ComponentActivity() {
                 Text(
                     "Current Temperature",
                     fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
                 Spacer(modifier = Modifier.height(32.dp))
 
@@ -539,7 +671,7 @@ class MainActivity : ComponentActivity() {
                     temperatureCelsius = currentTempCelsius.value,
                     minTemp = -20f,
                     maxTemp = 50f,
-                    useFahrenheit = true,
+                    useFahrenheit = defaultTempUnit.value == "°F",
                     thermometerHeight = 350.dp
                 )
             }
@@ -556,28 +688,37 @@ class MainActivity : ComponentActivity() {
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun TempDataScreen(modifier: Modifier = Modifier) {
+        // logEntries is always in Celsius — convert visually only
         val entries = logEntries.toList()
+        val useFahrenheit = defaultTempUnit.value == "°F"
+        val unitLabel = if (useFahrenheit) "°F" else "°C"
+        val displayEntries = if (useFahrenheit)
+            entries.map { Entry(it.x, it.y * 9f / 5f + 32f) }
+        else
+            entries
+
         Scaffold(
             modifier = Modifier.fillMaxSize()
         ) { contentPadding ->
             Column(
                 modifier = Modifier
                     .padding(contentPadding)
-                    .fillMaxSize(),
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 Text(
                     "Data Logging",
                     fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
 
                 AndroidView(
                     factory = { context ->
-
                         LineChart(context).apply {
                             xAxis.apply {
                                 position = XAxis.XAxisPosition.BOTTOM
@@ -598,14 +739,8 @@ class MainActivity : ComponentActivity() {
                             axisLeft.apply {
                                 textColor = android.graphics.Color.GRAY
                                 gridColor = android.graphics.Color.LTGRAY
-                                axisMinimum = 10f
-                                axisMaximum = 32f
                                 granularity = 0.1f
                                 isGranularityEnabled = true
-                                valueFormatter = object : ValueFormatter() {
-                                    override fun getFormattedValue(value: Float) =
-                                        if (value % 1f == 0f) "${value.toInt()}°C" else "${"%.1f".format(value)}°C"
-                                }
                             }
 
                             axisRight.isEnabled = false
@@ -640,7 +775,14 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     update = { chart ->
-                        val dataSet = LineDataSet(entries, "Temperature (°C)").apply {
+                        // Y-axis formatter uses the current display unit
+                        chart.axisLeft.valueFormatter = object : ValueFormatter() {
+                            override fun getFormattedValue(value: Float) =
+                                if (value % 1f == 0f) "${value.toInt()}$unitLabel"
+                                else "${"%.1f".format(value)}$unitLabel"
+                        }
+
+                        val dataSet = LineDataSet(displayEntries, "Temperature ($unitLabel)").apply {
                             color = "#1C86FF".toColorInt()
                             setCircleColor("#1C86FF".toColorInt())
                             circleRadius = 3f
@@ -653,14 +795,16 @@ class MainActivity : ComponentActivity() {
                             fillAlpha = 40
                             mode = LineDataSet.Mode.CUBIC_BEZIER
                         }
-                        if (entries.isNotEmpty()) {
-                            val minTemp = entries.minOf { it.y }
-                            val maxTemp = entries.maxOf { it.y }
-                            val maxX = entries.maxOf { it.x }
 
+                        if (displayEntries.isNotEmpty()) {
+                            val minDisplayTemp = displayEntries.minOf { it.y }
+                            val maxDisplayTemp = displayEntries.maxOf { it.y }
+                            val maxX = displayEntries.maxOf { it.x }
+
+                            // Sensible default bounds: pad 10 degrees, floor/ceil in the display unit
                             chart.axisLeft.apply {
-                                axisMinimum = minOf(minTemp - 10f, 0f)
-                                axisMaximum = maxOf(maxTemp + 10f, 30f)
+                                axisMinimum = minOf(minDisplayTemp - 10f, if (useFahrenheit) 32f else 0f)
+                                axisMaximum = maxOf(maxDisplayTemp + 10f, if (useFahrenheit) 86f else 30f)
                             }
 
                             chart.xAxis.apply {
@@ -677,6 +821,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
+
                         chart.data = LineData(dataSet)
                         chart.notifyDataSetChanged()
                         chart.invalidate()
@@ -698,18 +843,14 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Button(
-                        onClick = {
-                            showLoggingDialog.value = true
-                        },
+                        onClick = { showLoggingDialog.value = true },
                         modifier = Modifier.weight(12f)
                     ) {
                         Text("Get Logging Data")
                     }
                     Spacer(modifier = Modifier.weight(1f))
                     Button(
-                        onClick = {
-                            showSaveDialog.value = true
-                        },
+                        onClick = { showSaveDialog.value = true },
                         enabled = logEntries.isNotEmpty(),
                         modifier = Modifier.weight(12f)
                     ) {
@@ -718,6 +859,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
         if (showLoggingDialog.value) {
             GlobalAlertDialog(
                 {
@@ -727,16 +869,13 @@ class MainActivity : ComponentActivity() {
                 {
                     showLoggingDialog.value = false
                     if (bluetoothGatt == null && isConnected.value) {
-                        // debug case with fake data
                         logEntries.clear()
-
                         val intervalsPerDay = 24 * 6
-
                         repeat(intervalsPerDay) { index ->
                             val minutes = index * 10
                             val xValue = minutes / 60f
+                            // Fake data generated in Celsius — matches real device data
                             val yValue = (4f + Math.sin(index * 0.3) * 1.5f + (Math.random() - 0.5f) * 0.8f).toFloat()
-
                             logEntries.add(Entry(xValue, yValue))
                         }
                     } else {
@@ -750,6 +889,7 @@ class MainActivity : ComponentActivity() {
                 Icons.Default.FileOpen
             )
         }
+
         if (showSaveDialog.value) {
             val time = LocalDateTime.now()
             GlobalTextInputDialog(
@@ -757,11 +897,10 @@ class MainActivity : ComponentActivity() {
                 onConfirmation = { name ->
                     var fileName = name
                     showSaveDialog.value = false
-                    if (!fileName.endsWith(".csv")) {
-                        fileName = "$fileName.csv"
-                    }
-                    val file = File(getExternalFilesDir(null),fileName)
+                    if (!fileName.endsWith(".csv")) fileName = "$fileName.csv"
+                    val file = File(getExternalFilesDir(null), fileName)
                     file.printWriter().use { out ->
+                        // CSV is always written in Celsius regardless of display preference
                         out.println(listOf("Elapsed Time", "Temperature (°C)").joinToString(","))
                         logEntries.forEach { entry ->
                             out.println(listOf(entry.x.toString(), entry.y.toString()).joinToString(","))
@@ -779,33 +918,66 @@ class MainActivity : ComponentActivity() {
                 errorMessage = "Invalid file name. Avoid special characters like / \\ : * ? \" < > |",
             )
         }
+
         if (showGetSavedLogDialog.value) {
-            GetSavedLogDialog({showGetSavedLogDialog.value = false},{showGetSavedLogDialog.value = false})
+            GetSavedLogDialog(
+                { showGetSavedLogDialog.value = false },
+                { showGetSavedLogDialog.value = false }
+            )
         }
     }
     @Composable
     fun BluetoothScreen(modifier: Modifier = Modifier) {
-        Scaffold (
+        val scope = rememberCoroutineScope()
+        var deviceToRename by remember { mutableStateOf<ScannedDevice?>(null) }
+
+        Scaffold(
             modifier = Modifier.fillMaxSize()
         ) { contentPadding ->
             Column(
                 modifier = Modifier
                     .padding(contentPadding)
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                verticalArrangement = Arrangement.Top
             ) {
                 Text(
                     "Bluetooth Pairing",
                     fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
 
-                Text(if (currentDeviceName.value != null && isConnected.value) "Connected to ${currentDeviceName.value}" else "Not connected",
-                )
+                val statusText = when {
+                    isConnected.value -> {
+                        val alias = currentDeviceAddress.value?.let { deviceAliases[it] }
+                        "Connected to ${alias ?: currentDeviceName.value ?: "BRRBOX"}"
+                    }
+                    isAuthenticating.value -> {
+                        val alias = currentDeviceAddress.value?.let { deviceAliases[it] }
+                        "Authenticating with ${alias ?: currentDeviceName.value ?: "BRRBOX"}..."
+                    }
+                    isConnecting.value -> "Connecting..."
+                    else -> "Not connected"
+                }
+                Text(statusText)
 
                 Spacer(modifier = Modifier.height(24.dp))
+
+                Button(
+                    onClick = { disconnect() },
+                    enabled = isConnected.value,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Disconnect")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Button(
                     onClick = { scanForBRRBOX() },
@@ -824,31 +996,79 @@ class MainActivity : ComponentActivity() {
                         Text("Scan for BRRBOX")
                     }
                 }
+
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = PaddingValues(
+                        start = 8.dp,
+                        end = 8.dp,
+                        top = 8.dp,
+                        bottom = 80.dp // 👈 adjust as needed
+                    ),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(discoveredBRRBOXList) { item ->
                         ListRow(
                             item = item,
+                            displayName = deviceAliases[item.address]
+                                ?: item.advertisedName
+                                ?: "Unnamed BRRBOX",
                             onTopButtonClick = {
-                                currentDeviceName.value = item.advertisedName
-                                connectToMacAddress(item.address)
+                                scope.launch {
+                                    val allowed = validateAndConnect(item)
+                                    if (allowed) {
+                                        currentDeviceName.value = item.advertisedName
+                                        currentDeviceAddress.value = item.address
+                                        connectToMacAddress(item.address)
+                                    }
+                                }
                             },
-                            onBottomButtonClick = { simpleAlert("Coming Soon!") }
+                            onBottomButtonClick = {
+                                deviceToRename = item
+                            }
                         )
                     }
                 }
             }
         }
+
+        // Rename dialog — shown when the user taps Rename on a list row.
+        // Saving a blank name removes the alias and reverts to the advertised name.
+        deviceToRename?.let { device ->
+            GlobalTextInputDialog(
+                onDismissRequest = { deviceToRename = null },
+                onConfirmation = { newName ->
+                    if (newName.isBlank()) deleteAlias(device.address)
+                    else saveAlias(device.address, newName)
+                    deviceToRename = null
+                },
+                dialogTitle = "Rename BRRBOX",
+                dialogText = "Enter a local nickname for this BRRBOX. Leave blank to reset to its default name.",
+                confirmText = "Save",
+                dismissText = "Cancel",
+                icon = Icons.Default.Kitchen,
+                defaultText = deviceAliases[device.address] ?: device.advertisedName ?: "",
+                validationRegex = Regex("^[\\w\\- ]*$"),
+                errorMessage = "Use only letters, numbers, spaces, hyphens, or underscores."
+            )
+        }
     }
     @Composable
     fun LoginScreen(modifier: Modifier = Modifier) {
-        var username by remember { mutableStateOf("") }
-        var password by remember { mutableStateOf("") }
+        var emailInput by remember { mutableStateOf("") }
+        var passwordInput by remember { mutableStateOf("") }
         var currentLogin = remember { mutableStateOf<String?>(null) }
         var visible by remember { mutableStateOf(false) }
+        var isLoading by remember { mutableStateOf(false) }
+
+        LaunchedEffect(Unit) {
+            val user = supabase.auth.currentUserOrNull()
+            if (user != null) {
+                currentLogin.value = user.email
+            }
+        }
 
         Scaffold(
             modifier = Modifier.fillMaxSize()
@@ -857,6 +1077,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(contentPadding)
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
@@ -864,19 +1085,32 @@ class MainActivity : ComponentActivity() {
                 Text(
                     "Account Login",
                     fontSize = 36.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
 
-                Text(if (currentLogin.value != null) "Signed in as ${currentLogin.value}" else "Not signed in")
+                Text(
+                    buildAnnotatedString {
+                        if (currentLogin.value != null) {
+                            append("Signed in as ")
+                            withStyle(style = SpanStyle(fontWeight = FontWeight.Bold)) {
+                                append(currentLogin.value!!)
+                            }
+                        } else {
+                            append("Not signed in")
+                        }
+                    }
+                )
 
                 Spacer(modifier = Modifier.height(48.dp))
 
                 OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
+                    value = emailInput,
+                    onValueChange = { emailInput = it },
                     singleLine = true,
-                    label = { Text("Username") },
-                    modifier = Modifier.fillMaxWidth()
+                    label = { Text("Email") },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading && currentLogin.value == null
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -884,8 +1118,8 @@ class MainActivity : ComponentActivity() {
                 // Wrap in a Box so the icon sits inside/at the end of the field
                 Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
                         singleLine = true,
                         label = { Text("Password") },
                         visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -898,11 +1132,17 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isLoading && currentLogin.value == null
                     )
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
+
+                if (isLoading) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -910,22 +1150,110 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Button(
                         onClick = {
-                            currentLogin.value = username
-                            username = ""
-                            password = ""
+                            isLoading = true
+                            lifecycleScope.launch {
+                                try {
+                                    supabase.auth.signInWith(Email) {
+                                        email = emailInput
+                                        password = passwordInput
+                                    }
+                                    currentLogin.value = supabase.auth.currentUserOrNull()?.email
+                                    simpleAlert("Signed in successfully!")
+                                } catch (e: Exception) {
+                                    simpleAlert("Login failed: ${e.message}")
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
                         },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        enabled = !isLoading && currentLogin.value == null && emailInput.isNotEmpty() && passwordInput.isNotEmpty(),
                     ) {
                         Text("Sign In")
                     }
                     Button(
-                        onClick = { currentLogin.value = null },
-                        enabled = currentLogin.value != null,
+                        onClick = {
+                            isLoading = true
+                            lifecycleScope.launch {
+                                try {
+                                    supabase.auth.signOut()
+                                    currentLogin.value = null
+                                    emailInput = ""
+                                    passwordInput = ""
+                                    simpleAlert("Logged out.")
+                                } catch (e: Exception) {
+                                    simpleAlert("Logout failed: ${e.message}")
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
+                        },
+                        enabled = !isLoading && currentLogin.value != null,
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Log Out")
                     }
                 }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = {
+                            isLoading = true
+                            lifecycleScope.launch {
+                                try {
+                                    supabase.auth.signUpWith(Email) {
+                                        email = emailInput
+                                        password = passwordInput
+                                    }
+                                    simpleAlert("Sign up successful! Please check your email for verification.")
+                                } catch (e: Exception) {
+                                    simpleAlert("Sign up failed: ${e.message}")
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
+                        },
+                        enabled = !isLoading && currentLogin.value == null && emailInput.isNotEmpty() && passwordInput.isNotEmpty(),
+                        colors = ButtonDefaults.textButtonColors(
+                            containerColor = Color.Transparent
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        Text("Create Account")
+                    }
+
+                    TextButton(
+                        onClick = {
+                            if (emailInput.isEmpty()) {
+                                simpleAlert("Please enter your email address first.")
+                                return@TextButton
+                            }
+                            isLoading = true
+                            lifecycleScope.launch {
+                                try {
+                                    supabase.auth.resetPasswordForEmail(emailInput)
+                                    simpleAlert("Password reset email sent!")
+                                } catch (e: Exception) {
+                                    simpleAlert("Error: ${e.message}")
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
+                        },
+                        enabled = !isLoading && currentLogin.value == null,
+                        colors = ButtonDefaults.textButtonColors(
+                            containerColor = Color.Transparent
+                        ),
+                        contentPadding = PaddingValues(horizontal = 8.dp)
+                    ) {
+                        Text("Forgot Password?")
+                    }
+                }
+
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
@@ -933,8 +1261,10 @@ class MainActivity : ComponentActivity() {
     }
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
-    fun DebugScreen(modifier: Modifier = Modifier) {
+    fun SettingsScreen(modifier: Modifier = Modifier) {
         var command by remember { mutableStateOf("") }
+        val tempOptions = listOf("°F", "°C")
+
         Scaffold(
             modifier = Modifier.fillMaxSize()
         ) { contentPadding ->
@@ -942,15 +1272,65 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .padding(contentPadding)
                     .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
                     .padding(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    "Debug",
+                    "Settings",
                     fontSize = 36.sp,
                     fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
+
+                Text(
+                    "Default Temperature",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .selectableGroup(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    tempOptions.forEach { option ->
+                        Row(
+                            Modifier
+                                .height(48.dp)
+                                .selectable(
+                                    selected = (option == defaultTempUnit.value),
+                                    onClick = { saveTempUnit(option) },
+                                    role = Role.RadioButton
+                                )
+                                .padding(end = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = (option == defaultTempUnit.value),
+                                onClick = null
+                            )
+                            Text(
+                                text = option,
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.padding(start = 8.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    "Debug Commands",
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Row(
                     modifier = Modifier
@@ -1002,17 +1382,11 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Text(
-                    "Custom Commands",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-
                 OutlinedTextField(
                     value = command,
                     onValueChange = { command = it },
                     singleLine = true,
-                    label = { Text("Command...") },
+                    label = { Text("Custom Command...") },
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -1026,6 +1400,7 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                // ── Debug Logs ───────────────────────────────────────────────────────
                 Text(
                     "Debug Logs",
                     fontSize = 24.sp,
@@ -1036,7 +1411,7 @@ class MainActivity : ComponentActivity() {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .height(300.dp),
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = MaterialTheme.shapes.medium
                 ) {
@@ -1064,9 +1439,7 @@ class MainActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Button(
-                    onClick = {
-                        debugLog.value = mutableListOf()
-                    },
+                    onClick = { debugLog.value = mutableListOf() },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error
@@ -1087,8 +1460,8 @@ class MainActivity : ComponentActivity() {
         MONITOR("monitor", "Temp",Icons.Default.Thermostat,"View Current Device Temperature"),
         TEMPDATA("data", "Logs",Icons.Default.Archive,"View Temperature Logs"),
         BLUETOOTH("bluetooth", "Bluetooth",Icons.Default.Bluetooth,"Bluetooth Connection"),
-        LOGIN("login", "Account",Icons.Default.AccountCircle,"Login to User Account"),
-        DEBUG("debug", "Debug",Icons.Default.Terminal,"Debug Logs"),
+        LOGIN("login", "Account", Icons.Default.AccountCircle,"Login to User Account"),
+        SETTINGS("settings", "Settings",Icons.Default.Settings,"Settings Page"),
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -1096,17 +1469,25 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        supabase = createSupabaseClient(
+            supabaseUrl = "https://rbpcrenvnzbizcrdjwog.supabase.co",
+            supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJicGNyZW52bnpiaXpjcmRqd29nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ5ODA0ODIsImV4cCI6MjA5MDU1NjQ4Mn0.GFwszcXf_55XpN3u1LC4MnDyAp3FZaqHToW-xEBAkqM"
+        ) {
+            install(Auth)
+            install(Postgrest)
+        }
+
         val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
 
+        loadAliases()
         requestBluetoothPermissions()
 
         setContent {
-            MaterialTheme {
+            BRRBOXTheme {
                 MainScreen()
             }
         }
-
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -1128,7 +1509,7 @@ class MainActivity : ComponentActivity() {
                         Destination.TEMPDATA -> TempDataScreen()
                         Destination.BLUETOOTH -> BluetoothScreen()
                         Destination.LOGIN -> LoginScreen()
-                        Destination.DEBUG -> DebugScreen()
+                        Destination.SETTINGS -> SettingsScreen()
                     }
                 }
             }
@@ -1273,6 +1654,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun ListRow(
         item: ScannedDevice,
+        displayName: String,
         onTopButtonClick: () -> Unit,
         onBottomButtonClick: () -> Unit
     ) {
@@ -1286,7 +1668,7 @@ class MainActivity : ComponentActivity() {
         ) {
             Icon(
                 imageVector = Icons.Default.Kitchen,
-                contentDescription = item.advertisedName,
+                contentDescription = displayName,
                 modifier = Modifier.size(36.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
@@ -1294,7 +1676,7 @@ class MainActivity : ComponentActivity() {
             Spacer(modifier = Modifier.width(12.dp))
 
             Text(
-                text = item.advertisedName ?: "Unnamed BRRBOX",
+                text = displayName,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyLarge
             )
@@ -1308,7 +1690,7 @@ class MainActivity : ComponentActivity() {
                     onClick = onTopButtonClick,
                     modifier = Modifier.height(30.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                    enabled = !isConnected.value
+                    enabled = !isConnected.value && !isAuthenticating.value && !isConnecting.value
                 ) {
                     Text("Connect", style = MaterialTheme.typography.labelSmall)
                 }
@@ -1316,7 +1698,9 @@ class MainActivity : ComponentActivity() {
                     onClick = onBottomButtonClick,
                     modifier = Modifier.height(30.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary
+                    )
                 ) {
                     Text("Rename", style = MaterialTheme.typography.labelSmall)
                 }
@@ -1325,8 +1709,16 @@ class MainActivity : ComponentActivity() {
     }
 
     fun debugConnect() {
-        isConnected.value = !isConnected.value
-        addLog(if (isConnected.value) "Debug Mode - Connected (Fake)" else "Debug Mode - Disconnected")
+        if (isConnected.value) {
+            isConnected.value = false
+            isAuthenticating.value = false
+            addLog("Debug Mode - Disconnected")
+        } else {
+            // Jump straight to connected — no auth handshake in debug mode.
+            isConnected.value = true
+            isAuthenticating.value = false
+            addLog("Debug Mode - Connected (fake, auth skipped)")
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -1374,31 +1766,65 @@ class MainActivity : ComponentActivity() {
         onDismiss: () -> Unit,
         onConfirm: (String) -> Unit
     ) {
+        val MIN_CELSIUS = -30f   // −22 °F
+        val MAX_CELSIUS =  40f   //  104 °F
+
         val radioOptions = listOf("°F", "°C")
-        val (selectedOption, onOptionSelected) = remember { mutableStateOf(radioOptions[0]) }
+        val (selectedOption, onOptionSelected) = remember { mutableStateOf(defaultTempUnit.value) }
         val focusManager = LocalFocusManager.current
         val keyboardController = LocalSoftwareKeyboardController.current
-
         var isRangeMode by remember { mutableStateOf(false) }
-        var singleTemp by remember { mutableStateOf("32") }
-        var minTemp by remember { mutableStateOf("32") }
-        var maxTemp by remember { mutableStateOf("33") }
+
+        val seedSingle = if (defaultTempUnit.value == "°F") "32" else "0"
+        val seedMin    = if (defaultTempUnit.value == "°F") "-20" else "-29"
+        val seedMax    = if (defaultTempUnit.value == "°F") "70"  else "21"
+
+        var singleTemp by remember { mutableStateOf(seedSingle) }
+        var minTemp    by remember { mutableStateOf(seedMin) }
+        var maxTemp    by remember { mutableStateOf(seedMax) }
+
+        fun toCelsius(value: Float): Float =
+            if (selectedOption == "°F") (value - 32f) * 5f / 9f else value
+
+        val minAllowedDisplay = if (selectedOption == "°F") -22f else MIN_CELSIUS
+        val maxAllowedDisplay = if (selectedOption == "°F")  104f else MAX_CELSIUS
+        val limitLabel        = if (selectedOption == "°F") "-22 °F to 104 °F" else
+            "${String.format(Locale.US, "%.1f", MIN_CELSIUS)} °C " +
+                    "to ${String.format(Locale.US, "%.1f", MAX_CELSIUS)} °C"
+
+        fun Float.isInRange() = this in minAllowedDisplay..maxAllowedDisplay
+
+        val singleVal = singleTemp.toFloatOrNull()
+        val minVal    = minTemp.toFloatOrNull()
+        val maxVal    = maxTemp.toFloatOrNull()
+
+        // Per-field errors
+        val singleOutOfRange = singleVal != null && !singleVal.isInRange()
+        val minOutOfRange    = minVal    != null && !minVal.isInRange()
+        val maxOutOfRange    = maxVal    != null && !maxVal.isInRange()
+        val rangeOrderError  = !isRangeMode.not() &&   // only in range mode
+                minVal != null && maxVal != null &&
+                !minOutOfRange && !maxOutOfRange &&
+                minVal >= maxVal
+
+        val confirmEnabled = when {
+            isRangeMode  -> minVal  != null && maxVal  != null &&
+                    !minOutOfRange && !maxOutOfRange && !rangeOrderError
+            else         -> singleVal != null && !singleOutOfRange
+        }
 
         fun formatSigned(value: Float): String {
             val sign = if (value >= 0f) "+" else "-"
             return "$sign%05.1f".format(Math.abs(value))
         }
 
-        fun toCelsius(value: Float): Float =
-            if (selectedOption == "°F") (value - 32f) * 5f / 9f else value
-
         fun buildCommand(): String {
             return if (isRangeMode) {
-                val lo = toCelsius(minTemp.toFloatOrNull() ?: 0f)
-                val hi = toCelsius(maxTemp.toFloatOrNull() ?: 0f)
+                val lo = toCelsius(minVal!!)
+                val hi = toCelsius(maxVal!!)
                 "T${formatSigned(lo)}${formatSigned(hi)}"
             } else {
-                val t = toCelsius(singleTemp.toFloatOrNull() ?: 0f)
+                val t = toCelsius(singleVal!!)
                 "T${formatSigned(t - 0.1f)}${formatSigned(t + 0.1f)}"
             }
         }
@@ -1410,12 +1836,9 @@ class MainActivity : ComponentActivity() {
                 return String.format(Locale.US, "%.1f", converted)
             }
             singleTemp = conv(singleTemp)
-            minTemp = conv(minTemp)
-            maxTemp = conv(maxTemp)
+            minTemp    = conv(minTemp)
+            maxTemp    = conv(maxTemp)
         }
-
-        val rangeInvalid = isRangeMode &&
-                (minTemp.toFloatOrNull() ?: 0f) >= (maxTemp.toFloatOrNull() ?: 0f)
 
         Dialog(
             onDismissRequest = onDismiss,
@@ -1444,9 +1867,11 @@ class MainActivity : ComponentActivity() {
                         Text(
                             text = "Set Temperature",
                             style = MaterialTheme.typography.titleLarge,
-                            textAlign = TextAlign.Center
+                            textAlign = TextAlign.Center,
+                            color = MaterialTheme.colorScheme.primary
                         )
 
+                        // Single / Range toggle
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1472,10 +1897,26 @@ class MainActivity : ComponentActivity() {
                         if (!isRangeMode) {
                             OutlinedTextField(
                                 value = singleTemp,
-                                onValueChange = { if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$"))) singleTemp = it },
+                                onValueChange = {
+                                    if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$")))
+                                        singleTemp = it
+                                },
                                 label = { Text("Temperature") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide(); focusManager.clearFocus() }),
+                                isError = singleOutOfRange,
+                                supportingText = {
+                                    if (singleOutOfRange)
+                                        Text(
+                                            "Must be between $limitLabel",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                },
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Decimal,
+                                    imeAction = ImeAction.Done
+                                ),
+                                keyboardActions = KeyboardActions(onDone = {
+                                    keyboardController?.hide(); focusManager.clearFocus()
+                                }),
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -1487,28 +1928,60 @@ class MainActivity : ComponentActivity() {
                         } else {
                             OutlinedTextField(
                                 value = minTemp,
-                                onValueChange = { if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$"))) minTemp = it },
+                                onValueChange = {
+                                    if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$")))
+                                        minTemp = it
+                                },
                                 label = { Text("Min Temperature") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
+                                isError = minOutOfRange || rangeOrderError,
+                                supportingText = {
+                                    when {
+                                        minOutOfRange -> Text(
+                                            "Must be between $limitLabel",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                },
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Decimal,
+                                    imeAction = ImeAction.Next
+                                ),
                                 singleLine = true,
-                                isError = rangeInvalid,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             OutlinedTextField(
                                 value = maxTemp,
-                                onValueChange = { if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$"))) maxTemp = it },
-                                label = { Text("Max Temperature") },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                                keyboardActions = KeyboardActions(onDone = { keyboardController?.hide(); focusManager.clearFocus() }),
-                                singleLine = true,
-                                isError = rangeInvalid,
-                                supportingText = {
-                                    if (rangeInvalid) Text("Max must be greater than Min", color = MaterialTheme.colorScheme.error)
+                                onValueChange = {
+                                    if (it.isEmpty() || it.matches(Regex("^-?\\d*\\.?\\d*$")))
+                                        maxTemp = it
                                 },
+                                label = { Text("Max Temperature") },
+                                isError = maxOutOfRange || rangeOrderError,
+                                supportingText = {
+                                    when {
+                                        maxOutOfRange  -> Text(
+                                            "Must be between $limitLabel",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        rangeOrderError -> Text(
+                                            "Max must be greater than min",
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                },
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Decimal,
+                                    imeAction = ImeAction.Done
+                                ),
+                                keyboardActions = KeyboardActions(onDone = {
+                                    keyboardController?.hide(); focusManager.clearFocus()
+                                }),
+                                singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
 
+                        // °F / °C radio group
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1549,7 +2022,7 @@ class MainActivity : ComponentActivity() {
                             TextButton(onClick = onDismiss) { Text("Cancel") }
                             TextButton(
                                 onClick = { onConfirm(buildCommand()) },
-                                enabled = !rangeInvalid
+                                enabled = confirmEnabled
                             ) { Text("Set") }
                         }
                     }
@@ -1573,8 +2046,8 @@ class MainActivity : ComponentActivity() {
 
         AlertDialog(
             onDismissRequest = onDismissRequest,
-            icon = { Icon(Icons.Default.FileOpen, contentDescription = null) },
-            title = { Text("Open Log File") },
+            icon = { Icon(Icons.Default.FileOpen, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text("Open Log File", color = MaterialTheme.colorScheme.primary) },
             text = {
                 Column {
                     OutlinedButton(
@@ -1656,10 +2129,10 @@ class MainActivity : ComponentActivity() {
     ) {
         AlertDialog(
             icon = {
-                Icon(icon, contentDescription = "Example Icon")
+                Icon(icon, contentDescription = "Example Icon", tint = MaterialTheme.colorScheme.primary)
             },
             title = {
-                Text(text = dialogTitle)
+                Text(text = dialogTitle, color = MaterialTheme.colorScheme.primary)
             },
             text = {
                 Text(text = dialogText)
@@ -1706,10 +2179,10 @@ class MainActivity : ComponentActivity() {
 
         AlertDialog(
             icon = {
-                Icon(icon, contentDescription = "Dialog Icon")
+                Icon(icon, contentDescription = "Dialog Icon", tint = MaterialTheme.colorScheme.primary)
             },
             title = {
-                Text(text = dialogTitle)
+                Text(text = dialogTitle, color = MaterialTheme.colorScheme.primary)
             },
             text = {
                 Column {
@@ -1928,6 +2401,86 @@ class MainActivity : ComponentActivity() {
         chart.invalidate()
     }
 
+    private suspend fun validateAndConnect(item: ScannedDevice): Boolean {
+        val user = supabase.auth.currentUserOrNull()
+        if (user == null) {
+            simpleAlert("You must be signed in to connect to a BRRBOX.")
+            addLog("Connection blocked: user not signed in.")
+            return false
+        }
+
+        val userProfile = try {
+            supabase.from("users")
+                .select { filter { eq("id", user.id) } }
+                .decodeSingleOrNull<UserProfile>()
+        } catch (e: Exception) {
+            simpleAlert("Failed to fetch your account profile.")
+            addLog("validateAndConnect: user profile error — ${e.message}")
+            return false
+        }
+
+        val companyId = userProfile?.company_id
+        if (companyId == null) {
+            simpleAlert("Your account is not linked to a company. Contact your administrator.")
+            addLog("Connection blocked: user has no company_id.")
+            return false
+        }
+
+        val deviceName = item.advertisedName
+            ?.trim()
+            ?.trimEnd('\u0000')
+        if (deviceName == null) {
+            simpleAlert("This BRRBOX has no advertised name and cannot be verified.")
+            addLog("Connection blocked: device has no advertised name.")
+            return false
+        }
+
+        val rows = supabase.from("devices")
+            .select { filter { eq("device_name", deviceName) } }
+
+        val deviceRecord = try {
+            supabase.from("devices")
+                .select { filter { eq("device_name", deviceName) } }
+                .decodeSingleOrNull<DeviceRecord>()
+        } catch (e: Exception) {
+            simpleAlert("Failed to look up this BRRBOX in the database.")
+            addLog("validateAndConnect: device lookup error — ${e.message}")
+            return false
+        }
+
+        if (deviceRecord == null) {
+            simpleAlert("This BRRBOX ($deviceName) is not registered in the system.")
+            addLog("Connection blocked: device \"$deviceName\" not found in devices table.")
+            return false
+        }
+
+        val owned = try {
+            supabase.from("owned_devices")
+                .select {
+                    filter {
+                        eq("company_id", companyId)
+                        eq("device_id", deviceRecord.id)
+                    }
+                }
+                .decodeSingleOrNull<OwnedDeviceRecord>()
+        } catch (e: Exception) {
+            simpleAlert("Failed to verify device ownership.")
+            addLog("validateAndConnect: owned_devices error — ${e.message}")
+            return false
+        }
+
+        if (owned == null) {
+            simpleAlert("Your company does not have access to this BRRBOX.")
+            addLog("Connection blocked: no owned_devices match for company=$companyId, device=${deviceRecord.id}.")
+            return false
+        }
+
+        // ── Step 5: Cache the secret key — sent to the device after BLE connects ─
+        pendingSecretKey = deviceRecord.secret_key
+        addLog("Ownership verified for \"$deviceName\". Secret key cached. Proceeding to connect.")
+        return true
+    }
+
     fun disconnect() {
         if (ActivityCompat.checkSelfPermission(
                 this,
@@ -1942,6 +2495,8 @@ class MainActivity : ComponentActivity() {
         bluetoothGatt?.close()
         bluetoothGatt = null
         isConnected.value = false
+        isAuthenticating.value = false
+        pendingSecretKey = null
         addLog("Disconnected")
     }
 
