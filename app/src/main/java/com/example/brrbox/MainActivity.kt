@@ -325,7 +325,9 @@ class MainActivity : ComponentActivity() {
                 // ── Device name ──────────────────────────────────────────────────
                 // advName comes from the advertisement packet (set via SN on RNBD350).
                 // device.name is the cached system name, which may be stale — prefer advName.
-                val advName = scanRecord?.deviceName ?: device.name
+                val advName = (scanRecord?.deviceName ?: device.name)
+                    ?.trim()
+                    ?.trimEnd('\u0000')
 
                 val manufacturerData = scanRecord?.manufacturerSpecificData
                 var manufacturerId: Int?    = null
@@ -514,28 +516,21 @@ class MainActivity : ComponentActivity() {
         addLog("From BRRBOX: $message")
 
         if (message.matches(Regex("X[0-9A-Fa-f]{2}"))) {
-            // Parse the two hex digits directly — the original used .toByte() which
-            // mis-parses anything above 0x09 and throws on A-F characters.
             val code = message.removePrefix("X").toInt(16) and 0xFF
             when (code) {
                 0xAA -> {
-                    // Secret key accepted — device is now ready for commands.
                     isAuthenticating.value = false
                     isConnected.value = true
                     addLog("Secret key accepted — device ready.")
                     simpleAlert("Connected!")
                 }
                 0xA0 -> {
-                    // Secret key rejected — BRRBOX will also force-disconnect on its end.
                     isAuthenticating.value = false
                     addLog("Secret key rejected by BRRBOX.")
                     simpleAlert("Authentication failed: invalid key.")
                     disconnect()
                 }
                 0xA1 -> {
-                    // BRRBOX is still in the waiting-for-key state, which means our
-                    // key write may not have arrived yet. Log it; the send path already
-                    // handles retries if needed.
                     addLog("BRRBOX waiting for secret key (XA1 — key may not have arrived yet).")
                 }
                 0x00 -> simpleAlert("Message received!")
@@ -969,6 +964,19 @@ class MainActivity : ComponentActivity() {
                 Text(statusText)
 
                 Spacer(modifier = Modifier.height(24.dp))
+
+                Button(
+                    onClick = { disconnect() },
+                    enabled = isConnected.value,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Disconnect")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Button(
                     onClick = { scanForBRRBOX() },
@@ -2393,7 +2401,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun validateAndConnect(item: ScannedDevice): Boolean {
-        // ── Step 1: Require the user to be signed in ─────────────────────────────
         val user = supabase.auth.currentUserOrNull()
         if (user == null) {
             simpleAlert("You must be signed in to connect to a BRRBOX.")
@@ -2401,7 +2408,6 @@ class MainActivity : ComponentActivity() {
             return false
         }
 
-        // ── Step 2: Fetch the user's company_id from public.users ────────────────
         val userProfile = try {
             supabase.from("users")
                 .select { filter { eq("id", user.id) } }
@@ -2419,13 +2425,17 @@ class MainActivity : ComponentActivity() {
             return false
         }
 
-        // ── Step 3: Look up the device by advertised name in the devices table ───
         val deviceName = item.advertisedName
+            ?.trim()
+            ?.trimEnd('\u0000')
         if (deviceName == null) {
             simpleAlert("This BRRBOX has no advertised name and cannot be verified.")
             addLog("Connection blocked: device has no advertised name.")
             return false
         }
+
+        val rows = supabase.from("devices")
+            .select { filter { eq("device_name", deviceName) } }
 
         val deviceRecord = try {
             supabase.from("devices")
@@ -2443,7 +2453,6 @@ class MainActivity : ComponentActivity() {
             return false
         }
 
-        // ── Step 4: Verify ownership via owned_devices ───────────────────────────
         val owned = try {
             supabase.from("owned_devices")
                 .select {
