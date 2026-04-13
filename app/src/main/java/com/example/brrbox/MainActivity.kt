@@ -86,11 +86,18 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.app.ActivityCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.github.mikephil.charting.data.LineDataSet
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.providers.builtin.Email
+import io.github.jan.supabase.createSupabaseClient
+import io.github.jan.supabase.postgrest.Postgrest
 import java.util.Locale
 import java.util.UUID
 import androidx.core.graphics.toColorInt
@@ -103,6 +110,7 @@ import com.github.mikephil.charting.formatter.ValueFormatter
 import com.github.mikephil.charting.listener.ChartTouchListener
 import com.github.mikephil.charting.listener.OnChartGestureListener
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.io.File
 import java.time.Instant
 import java.time.LocalDateTime
@@ -146,6 +154,8 @@ class MainActivity : ComponentActivity() {
     // To be removed.
     private var BRRBOX_MAC_SEARCHING = ""
     private val BRRBOX_MAC = "40:84:32:01:3B:28"
+
+    private lateinit var supabase: SupabaseClient
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -845,10 +855,18 @@ class MainActivity : ComponentActivity() {
     }
     @Composable
     fun LoginScreen(modifier: Modifier = Modifier) {
-        var username by remember { mutableStateOf("") }
-        var password by remember { mutableStateOf("") }
+        var emailInput by remember { mutableStateOf("") }
+        var passwordInput by remember { mutableStateOf("") }
         var currentLogin = remember { mutableStateOf<String?>(null) }
         var visible by remember { mutableStateOf(false) }
+        var isLoading by remember { mutableStateOf(false) }
+
+        LaunchedEffect(Unit) {
+            val user = supabase.auth.currentUserOrNull()
+            if (user != null) {
+                currentLogin.value = user.email
+            }
+        }
 
         Scaffold(
             modifier = Modifier.fillMaxSize()
@@ -872,11 +890,12 @@ class MainActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(48.dp))
 
                 OutlinedTextField(
-                    value = username,
-                    onValueChange = { username = it },
+                    value = emailInput,
+                    onValueChange = { emailInput = it },
                     singleLine = true,
-                    label = { Text("Username") },
-                    modifier = Modifier.fillMaxWidth()
+                    label = { Text("Email") },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isLoading && currentLogin.value == null
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -884,8 +903,8 @@ class MainActivity : ComponentActivity() {
                 // Wrap in a Box so the icon sits inside/at the end of the field
                 Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
                         singleLine = true,
                         label = { Text("Password") },
                         visualTransformation = if (visible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -898,11 +917,17 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isLoading && currentLogin.value == null
                     )
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))
+
+                if (isLoading) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -910,18 +935,45 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Button(
                         onClick = {
-                            currentLogin.value = username
-                            username = ""
-                            password = ""
+                            isLoading = true
+                            lifecycleScope.launch {
+                                try {
+                                    supabase.auth.signInWith(Email) {
+                                        email = emailInput
+                                        password = passwordInput
+                                    }
+                                    currentLogin.value = supabase.auth.currentUserOrNull()?.email
+                                    simpleAlert("Signed in successfully!")
+                                } catch (e: Exception) {
+                                    simpleAlert("Login failed: ${e.message}")
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
                         },
                         modifier = Modifier.weight(1f),
-                        enabled = currentLogin.value == null,
+                        enabled = !isLoading && currentLogin.value == null && emailInput.isNotEmpty() && passwordInput.isNotEmpty(),
                     ) {
                         Text("Sign In")
                     }
                     Button(
-                        onClick = { currentLogin.value = null },
-                        enabled = currentLogin.value != null,
+                        onClick = {
+                            isLoading = true
+                            lifecycleScope.launch {
+                                try {
+                                    supabase.auth.signOut()
+                                    currentLogin.value = null
+                                    emailInput = ""
+                                    passwordInput = ""
+                                    simpleAlert("Logged out.")
+                                } catch (e: Exception) {
+                                    simpleAlert("Logout failed: ${e.message}")
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
+                        },
+                        enabled = !isLoading && currentLogin.value != null,
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Log Out")
@@ -934,8 +986,22 @@ class MainActivity : ComponentActivity() {
                 ) {
                     TextButton(
                         onClick = {
-
+                            isLoading = true
+                            lifecycleScope.launch {
+                                try {
+                                    supabase.auth.signUpWith(Email) {
+                                        email = emailInput
+                                        password = passwordInput
+                                    }
+                                    simpleAlert("Sign up successful! Please check your email for verification.")
+                                } catch (e: Exception) {
+                                    simpleAlert("Sign up failed: ${e.message}")
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
                         },
+                        enabled = !isLoading && currentLogin.value == null && emailInput.isNotEmpty() && passwordInput.isNotEmpty(),
                         colors = ButtonDefaults.textButtonColors(
                             containerColor = Color.Transparent
                         ),
@@ -946,8 +1012,23 @@ class MainActivity : ComponentActivity() {
 
                     TextButton(
                         onClick = {
-
+                            if (emailInput.isEmpty()) {
+                                simpleAlert("Please enter your email address first.")
+                                return@TextButton
+                            }
+                            isLoading = true
+                            lifecycleScope.launch {
+                                try {
+                                    supabase.auth.resetPasswordForEmail(emailInput)
+                                    simpleAlert("Password reset email sent!")
+                                } catch (e: Exception) {
+                                    simpleAlert("Error: ${e.message}")
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
                         },
+                        enabled = !isLoading && currentLogin.value == null,
                         colors = ButtonDefaults.textButtonColors(
                             containerColor = Color.Transparent
                         ),
@@ -1118,7 +1199,7 @@ class MainActivity : ComponentActivity() {
         MONITOR("monitor", "Temp",Icons.Default.Thermostat,"View Current Device Temperature"),
         TEMPDATA("data", "Logs",Icons.Default.Archive,"View Temperature Logs"),
         BLUETOOTH("bluetooth", "Bluetooth",Icons.Default.Bluetooth,"Bluetooth Connection"),
-        LOGIN("login", "Account",Icons.Default.AccountCircle,"Login to User Account"),
+        LOGIN("login", "Account", Icons.Default.AccountCircle,"Login to User Account"),
         DEBUG("debug", "Debug",Icons.Default.Terminal,"Debug Logs"),
     }
 
@@ -1126,6 +1207,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        supabase = createSupabaseClient(
+            supabaseUrl = "https://rbpcrenvnzbizcrdjwog.supabase.co",
+            supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJicGNyZW52bnpiaXpjcmRqd29nIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ5ODA0ODIsImV4cCI6MjA5MDU1NjQ4Mn0.GFwszcXf_55XpN3u1LC4MnDyAp3FZaqHToW-xEBAkqM"
+        ) {
+            install(Auth)
+            install(Postgrest)
+        }
 
         val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
