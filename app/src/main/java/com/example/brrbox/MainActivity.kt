@@ -532,7 +532,8 @@ class MainActivity : ComponentActivity() {
                     disconnect()
                 }
                 0xA1 -> {
-                    addLog("BRRBOX waiting for secret key (XA1 — key may not have arrived yet).")
+                    addLog("BRRBOX still waiting for secret key. Sending again.")
+                    sendCommand("K$pendingSecretKey")
                 }
                 0x00 -> simpleAlert("Message received!")
                 0x01 -> simpleAlert("Connected to BRRBOX!")
@@ -550,6 +551,7 @@ class MainActivity : ComponentActivity() {
                 }
                 0xE0 -> simpleAlert("Error received from BRRBOX.")
                 0xE1 -> simpleAlert("Error received from BRRBOX: No logging data available!")
+                0xE2 -> simpleAlert("Lid currently open, cannot lock.")
                 else -> addLog("Unknown status code: 0x${code.toString(16).uppercase()}")
             }
             return
