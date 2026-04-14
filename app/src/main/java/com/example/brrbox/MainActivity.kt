@@ -492,6 +492,7 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        @RequiresApi(Build.VERSION_CODES.TIRAMISU)
         override fun onCharacteristicChanged(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
@@ -513,6 +514,7 @@ class MainActivity : ComponentActivity() {
 
 
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun processMessage(message: String) {
         addLog("From BRRBOX: $message")
 
@@ -1736,6 +1738,9 @@ class MainActivity : ComponentActivity() {
         val message = command + "\n"
 
         addLog("Sending message: $message")
+        if (!message.startsWith("K")) {
+            addLog("Sending message: $message")
+        }
 
         val service = bluetoothGatt?.getService(SERVICE_UUID)
         val characteristic = service?.getCharacteristic(RX_CHARACTERISTIC_UUID)
