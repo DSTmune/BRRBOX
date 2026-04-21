@@ -150,6 +150,7 @@ class MainActivity : ComponentActivity() {
     private var receivingLoggingData = mutableStateOf(false)
 
     private var currentTempCelsius = mutableStateOf(0f)
+    private var outsideTempCelsius = mutableStateOf(0f)
     private var logEntries = mutableStateListOf<Entry>()
 
     private val docDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
@@ -569,6 +570,14 @@ class MainActivity : ComponentActivity() {
 
         if (message.startsWith("M")) {
             currentTempCelsius.value = message.removePrefix("M").toFloatOrNull() ?: currentTempCelsius.value
+            val payload = message.removePrefix("M")
+            val parts = payload.split(Regex("(?=[+-])")).filter { it.isNotEmpty() }
+            if (parts.size >= 2) {
+                currentTempCelsius.value = parts[0].toFloatOrNull() ?: currentTempCelsius.value
+                outsideTempCelsius.value = parts[1].toFloatOrNull() ?: outsideTempCelsius.value
+            } else {
+                currentTempCelsius.value = payload.toFloatOrNull() ?: currentTempCelsius.value
+            }
         }
     }
 
@@ -671,13 +680,57 @@ class MainActivity : ComponentActivity() {
                 )
                 Spacer(modifier = Modifier.height(32.dp))
 
+                val useFahrenheit = defaultTempUnit.value == "°F"
+                val outsideDisplay = if (useFahrenheit) outsideTempCelsius.value * 9f / 5f + 32f else outsideTempCelsius.value
+                val insideDisplay  = if (useFahrenheit) currentTempCelsius.value * 9f / 5f + 32f else currentTempCelsius.value
+                val differential   = insideDisplay - outsideDisplay
+                val unitLabel      = if (useFahrenheit) "°F" else "°C"
+                val diffSign       = if (differential >= 0f) "+" else ""
+
                 ThermometerGraphic(
                     temperatureCelsius = currentTempCelsius.value,
                     minTemp = -20f,
                     maxTemp = 50f,
-                    useFahrenheit = defaultTempUnit.value == "°F",
+                    useFahrenheit = useFahrenheit,
                     thermometerHeight = 350.dp
                 )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            "Outside Temperature",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "${"%.1f".format(outsideDisplay)}$unitLabel",
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Differential (inside − outside)",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "$diffSign${"%.1f".format(differential)}$unitLabel",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (differential >= 0f) MaterialTheme.colorScheme.error else Color(0xFF4FC3F7)
+                        )
+                    }
+                }
             }
         }
         LaunchedEffect(Unit) {
@@ -2100,8 +2153,8 @@ class MainActivity : ComponentActivity() {
                                             DateTimeFormatter.ofPattern("MMM d, yyyy  HH:mm")
                                                 .format(
                                                     Instant.ofEpochMilli(file.lastModified())
-                                                    .atZone(ZoneId.systemDefault())
-                                                    .toLocalDateTime()),
+                                                        .atZone(ZoneId.systemDefault())
+                                                        .toLocalDateTime()),
                                             fontSize = 11.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             textAlign = TextAlign.Start,
@@ -2512,3 +2565,4 @@ class MainActivity : ComponentActivity() {
         disconnect()
     }
 }
+
