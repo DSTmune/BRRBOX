@@ -133,7 +133,6 @@ class MainActivity : ComponentActivity() {
 
     private val receiveBuffer = StringBuilder()
 
-    // Status states
     private var isConnected = mutableStateOf(false)
     private var isConnecting = mutableStateOf(false)
     private var isScanning = mutableStateOf(false)
@@ -155,12 +154,10 @@ class MainActivity : ComponentActivity() {
 
     private val docDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
 
-    // BLE UUID
     private val SERVICE_UUID = UUID.fromString("49535343-FE7D-4AE5-8FA9-9FAFD205E455")
     private val RX_CHARACTERISTIC_UUID = UUID.fromString("49535343-8841-43F4-A8D4-ECBE34729BB3")
     private val TX_CHARACTERISTIC_UUID = UUID.fromString("49535343-1E4D-4BD9-BA61-23C647249616")
 
-    // To be removed.
     private var BRRBOX_MAC_SEARCHING = ""
     private val BRRBOX_MAC = "40:84:32:01:3B:28"
 
@@ -222,8 +219,8 @@ class MainActivity : ComponentActivity() {
 
     private fun addLog(message: String) {
         val currentLog = debugLog.value.toMutableList()
-        currentLog.add(0, LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))+"  "+message) // Add to beginning
-        if (currentLog.size > 100) { // Keep last 20 logs
+        currentLog.add(0, LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))+"  "+message)
+        if (currentLog.size > 100) {
             currentLog.removeAt(currentLog.lastIndex)
         }
         debugLog.value = currentLog
@@ -244,13 +241,11 @@ class MainActivity : ComponentActivity() {
                 val deviceAddress = device.address
                 val rssi = result.rssi
 
-                // ✔ Only log NEW MAC addresses
                 if (!discoveredDevices.contains(deviceAddress)) {
                     discoveredDevices.add(deviceAddress)
                     addLog("Found: $deviceName ($deviceAddress) RSSI: $rssi dBm")
                 }
 
-                // Existing logic: connect immediately if it's BRRBOX
                 if (device.address.equals(BRRBOX_MAC_SEARCHING, ignoreCase = true)) {
                     bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
                     addLog("Connecting to BRRBOX...")
@@ -280,18 +275,14 @@ class MainActivity : ComponentActivity() {
         val id: String
     )
 
-// ── Data model for a scan result ────────────────────────────────────────────
-
     data class ScannedDevice(
         val address: String,
-        val advertisedName: String?,   // from SN command on RNBD350 (IA,09)
+        val advertisedName: String?,
         val rssi: Int,
-        val manufacturerId: Int?,      // company ID from IA,FF (e.g. 0x004C = Apple)
-        val manufacturerPayload: String?,  // remaining bytes after company ID, as hex string
+        val manufacturerId: Int?,
+        val manufacturerPayload: String?,
         val serviceUuids: List<String>
     ) {
-        // Map company ID to a human-readable name
-        // IA,FF on RNBD350 puts your custom company ID as the SparseArray key
         val manufacturerName: String
             get() = when (manufacturerId) {
                 0x0006 -> "Microsoft"
@@ -323,9 +314,6 @@ class MainActivity : ComponentActivity() {
                 if (discoveredDevices.contains(address)) return
                 discoveredDevices.add(address)
 
-                // ── Device name ──────────────────────────────────────────────────
-                // advName comes from the advertisement packet (set via SN on RNBD350).
-                // device.name is the cached system name, which may be stale — prefer advName.
                 val advName = (scanRecord?.deviceName ?: device.name)
                     ?.trim()
                     ?.trimEnd('\u0000')
@@ -339,7 +327,7 @@ class MainActivity : ComponentActivity() {
                     val rawBytes   = manufacturerData.valueAt(0)
 
                     manufacturerPayload = rawBytes.joinToString(" ") {
-                        "%02X".format(it.toInt() and 0xFF)  // unsigned hex, e.g. "DE AD BE EF"
+                        "%02X".format(it.toInt() and 0xFF)
                     }
                 }
 
@@ -362,7 +350,6 @@ class MainActivity : ComponentActivity() {
                     addLog("DISCOVERED A BRRBOX!")
                 }
 
-                // Debug log (concise)
                 addLog("Found: ${advName ?: "?"} ($address)  RSSI: $rssi dBm")
                 if (manufacturerId != null) {
                     addLog("  Manufacturer: ${scanned.manufacturerName} | Payload: $manufacturerPayload")
@@ -432,10 +419,9 @@ class MainActivity : ComponentActivity() {
                     addLog("TX characteristic not found!")
                 }
 
+                // send secret key to verify device
                 val key = pendingSecretKey
                 if (key != null) {
-                    // Key available — enter authenticating state and send it after
-                    // a short delay to let the descriptor write settle.
                     isAuthenticating.value = true
                     addLog("Sending secret key for validation...")
                     lifecycleScope.launch {
@@ -470,7 +456,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 } else {
-                    // No key (direct MAC / debug path) — skip auth and mark connected.
                     isConnected.value = true
                     addLog("No secret key provided — skipping auth (debug mode)")
                     simpleAlert("Connected!")
@@ -745,7 +730,6 @@ class MainActivity : ComponentActivity() {
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun TempDataScreen(modifier: Modifier = Modifier) {
-        // logEntries is always in Celsius — convert visually only
         val entries = logEntries.toList()
         val useFahrenheit = defaultTempUnit.value == "°F"
         val unitLabel = if (useFahrenheit) "°F" else "°C"
@@ -832,7 +816,6 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     update = { chart ->
-                        // Y-axis formatter uses the current display unit
                         chart.axisLeft.valueFormatter = object : ValueFormatter() {
                             override fun getFormattedValue(value: Float) =
                                 if (value % 1f == 0f) "${value.toInt()}$unitLabel"
@@ -858,7 +841,6 @@ class MainActivity : ComponentActivity() {
                             val maxDisplayTemp = displayEntries.maxOf { it.y }
                             val maxX = displayEntries.maxOf { it.x }
 
-                            // Sensible default bounds: pad 10 degrees, floor/ceil in the display unit
                             chart.axisLeft.apply {
                                 axisMinimum = minOf(minDisplayTemp - 10f, if (useFahrenheit) 32f else 0f)
                                 axisMaximum = maxOf(maxDisplayTemp + 10f, if (useFahrenheit) 86f else 30f)
@@ -931,7 +913,6 @@ class MainActivity : ComponentActivity() {
                         repeat(intervalsPerDay) { index ->
                             val minutes = index * 10
                             val xValue = minutes / 60f
-                            // Fake data generated in Celsius — matches real device data
                             val yValue = (4f + Math.sin(index * 0.3) * 1.5f + (Math.random() - 0.5f) * 0.8f).toFloat()
                             logEntries.add(Entry(xValue, yValue))
                         }
@@ -957,7 +938,6 @@ class MainActivity : ComponentActivity() {
                     if (!fileName.endsWith(".csv")) fileName = "$fileName.csv"
                     val file = File(getExternalFilesDir(null), fileName)
                     file.printWriter().use { out ->
-                        // CSV is always written in Celsius regardless of display preference
                         out.println(listOf("Elapsed Time", "Temperature (°C)").joinToString(","))
                         logEntries.forEach { entry ->
                             out.println(listOf(entry.x.toString(), entry.y.toString()).joinToString(","))
@@ -1062,7 +1042,7 @@ class MainActivity : ComponentActivity() {
                         start = 8.dp,
                         end = 8.dp,
                         top = 8.dp,
-                        bottom = 80.dp // 👈 adjust as needed
+                        bottom = 80.dp
                     ),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -1091,8 +1071,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Rename dialog — shown when the user taps Rename on a list row.
-        // Saving a blank name removes the alias and reverts to the advertised name.
         deviceToRename?.let { device ->
             GlobalTextInputDialog(
                 onDismissRequest = { deviceToRename = null },
@@ -1172,7 +1150,6 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Wrap in a Box so the icon sits inside/at the end of the field
                 Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = passwordInput,
@@ -1457,7 +1434,6 @@ class MainActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // ── Debug Logs ───────────────────────────────────────────────────────
                 Text(
                     "Debug Logs",
                     fontSize = 24.sp,
@@ -1670,7 +1646,6 @@ class MainActivity : ComponentActivity() {
 
         BRRBOX_MAC_SEARCHING = macToSearch
 
-        // Try bonded first
         bluetoothAdapter?.bondedDevices?.forEach { device ->
             if (device.address.equals(BRRBOX_MAC_SEARCHING, ignoreCase = true)) {
                 addLog("Found bonded BRRBOX - Connecting...")
@@ -1679,7 +1654,6 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        // Fall back to scanning
         simpleAlert("Searching...")
         addLog("Scanning for devices...")
         val scanSettings = ScanSettings.Builder()
@@ -1771,7 +1745,6 @@ class MainActivity : ComponentActivity() {
             isAuthenticating.value = false
             addLog("Debug Mode - Disconnected")
         } else {
-            // Jump straight to connected — no auth handshake in debug mode.
             isConnected.value = true
             isAuthenticating.value = false
             addLog("Debug Mode - Connected (fake, auth skipped)")
@@ -1811,7 +1784,7 @@ class MainActivity : ComponentActivity() {
 
     private fun parseLines(lines : List<String>) {
         logEntries.clear()
-        lines.drop(1).forEach { line -> // skip header
+        lines.drop(1).forEach { line ->
             val parts = line.split(",")
             if (parts.size == 2) {
                 val x = parts[0].toFloatOrNull()
@@ -1826,8 +1799,8 @@ class MainActivity : ComponentActivity() {
         onDismiss: () -> Unit,
         onConfirm: (String) -> Unit
     ) {
-        val MIN_CELSIUS = -30f   // −22 °F
-        val MAX_CELSIUS =  40f   //  104 °F
+        val MIN_CELSIUS = -30f
+        val MAX_CELSIUS =  40f
 
         val radioOptions = listOf("°F", "°C")
         val (selectedOption, onOptionSelected) = remember { mutableStateOf(defaultTempUnit.value) }
@@ -1858,11 +1831,10 @@ class MainActivity : ComponentActivity() {
         val minVal    = minTemp.toFloatOrNull()
         val maxVal    = maxTemp.toFloatOrNull()
 
-        // Per-field errors
         val singleOutOfRange = singleVal != null && !singleVal.isInRange()
         val minOutOfRange    = minVal    != null && !minVal.isInRange()
         val maxOutOfRange    = maxVal    != null && !maxVal.isInRange()
-        val rangeOrderError  = !isRangeMode.not() &&   // only in range mode
+        val rangeOrderError  = !isRangeMode.not() &&
                 minVal != null && maxVal != null &&
                 !minOutOfRange && !maxOutOfRange &&
                 minVal >= maxVal
@@ -1931,7 +1903,6 @@ class MainActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.primary
                         )
 
-                        // Single / Range toggle
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -2041,7 +2012,6 @@ class MainActivity : ComponentActivity() {
                             )
                         }
 
-                        // °F / °C radio group
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2336,7 +2306,6 @@ class MainActivity : ComponentActivity() {
             verticalAlignment = Alignment.CenterVertically,
             modifier = modifier
         ) {
-            // Thermometer stem + bulb
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -2409,17 +2378,16 @@ class MainActivity : ComponentActivity() {
 
             Spacer(modifier = Modifier.width(24.dp))
 
-            // Labels to the right, vertically centered
             Column {
                 Text(
                     text = "${String.format(Locale.US, "%.1f", displayTemp)}$primaryUnit",
-                    fontSize = (thermometerHeight.value / 6).sp,   // e.g. 350dp → ~58sp
+                    fontSize = (thermometerHeight.value / 6).sp,
                     fontWeight = FontWeight.Bold,
                     color = color
                 )
                 Text(
                     text = "${String.format(Locale.US, "%.1f", secondaryValue)}$secondaryUnit",
-                    fontSize = (thermometerHeight.value / 14).sp,  // e.g. 350dp → ~25sp
+                    fontSize = (thermometerHeight.value / 14).sp,
                     color = color.copy(alpha = 0.7f)
                 )
             }
@@ -2427,7 +2395,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateXAxisGranularity(chart: LineChart) {
-        val visibleRange = chart.visibleXRange // in hours
+        val visibleRange = chart.visibleXRange
         val granularityHours = when {
             visibleRange <= 0.1f  -> 1f / 60f
             visibleRange <= 0.25f -> 5f / 60f
@@ -2461,14 +2429,18 @@ class MainActivity : ComponentActivity() {
         chart.invalidate()
     }
 
+    // FINAL PROJECT - SECURITY SYSTEM
     private suspend fun validateAndConnect(item: ScannedDevice): Boolean {
         val user = supabase.auth.currentUserOrNull()
+
+        // check if user is signed in
         if (user == null) {
             simpleAlert("You must be signed in to connect to a BRRBOX.")
             addLog("Connection blocked: user not signed in.")
             return false
         }
 
+        // checks if user is linked to a profile
         val userProfile = try {
             supabase.from("users")
                 .select { filter { eq("id", user.id) } }
@@ -2479,6 +2451,7 @@ class MainActivity : ComponentActivity() {
             return false
         }
 
+        // checks if account isn't linked to a company
         val companyId = userProfile?.company_id
         if (companyId == null) {
             simpleAlert("Your account is not linked to a company. Contact your administrator.")
@@ -2486,6 +2459,7 @@ class MainActivity : ComponentActivity() {
             return false
         }
 
+        // check if device has an advertised name to search
         val deviceName = item.advertisedName
             ?.trim()
             ?.trimEnd('\u0000')
@@ -2495,6 +2469,7 @@ class MainActivity : ComponentActivity() {
             return false
         }
 
+        // find BRRBOX in database
         val rows = supabase.from("devices")
             .select { filter { eq("device_name", deviceName) } }
 
@@ -2514,6 +2489,7 @@ class MainActivity : ComponentActivity() {
             return false
         }
 
+        // verify that user's company can access BRRBOX
         val owned = try {
             supabase.from("owned_devices")
                 .select {
@@ -2535,7 +2511,6 @@ class MainActivity : ComponentActivity() {
             return false
         }
 
-        // ── Step 5: Cache the secret key — sent to the device after BLE connects ─
         pendingSecretKey = deviceRecord.secret_key
         addLog("Ownership verified for \"$deviceName\". Secret key cached. Proceeding to connect.")
         return true
