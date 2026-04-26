@@ -154,11 +154,13 @@ class MainActivity : ComponentActivity() {
 
     private val docDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
 
-    private val SERVICE_UUID = UUID.fromString("49535343-FE7D-4AE5-8FA9-9FAFD205E455")
-    private val RX_CHARACTERISTIC_UUID = UUID.fromString("49535343-8841-43F4-A8D4-ECBE34729BB3")
-    private val TX_CHARACTERISTIC_UUID = UUID.fromString("49535343-1E4D-4BD9-BA61-23C647249616")
+    // these are service uuids built-in to the bluetooth module
+    private val SERVICE_UUID = UUID.fromString("49535343-FE7D-4AE5-8FA9-9FAFD205E455") // the transparent uart service
+    private val RX_CHARACTERISTIC_UUID = UUID.fromString("49535343-8841-43F4-A8D4-ECBE34729BB3") // send messages to the box
+    private val TX_CHARACTERISTIC_UUID = UUID.fromString("49535343-1E4D-4BD9-BA61-23C647249616") // receive messages from the box
 
     private var BRRBOX_MAC_SEARCHING = ""
+    // for debug purposes, can connect to the BRRBOX directly
     private val BRRBOX_MAC = "40:84:32:01:3B:28"
 
     private lateinit var supabase: SupabaseClient
@@ -169,19 +171,23 @@ class MainActivity : ComponentActivity() {
     private val deviceAliases = mutableStateMapOf<String, String>()
     private val ALIAS_PREFS = "brrbox_device_aliases"
 
+    // default temperature preferences.
     private val TEMP_PREFS = "brrbox_temp_prefs"
     private var defaultTempUnit = mutableStateOf("°F")
 
+    /** Loads the saved temperature unit preference (°F or °C). */
     private fun loadTempUnit() {
         val prefs = getSharedPreferences(TEMP_PREFS, MODE_PRIVATE)
         defaultTempUnit.value = prefs.getString("temp_unit", "°F") ?: "°F"
     }
 
+    /** Saves the preferred temperature unit for later use. */
     private fun saveTempUnit(unit: String) {
         getSharedPreferences(TEMP_PREFS, MODE_PRIVATE).edit().putString("temp_unit", unit).apply()
         defaultTempUnit.value = unit
     }
 
+    /** Loads all saved device names. */
     private fun loadAliases() {
         val prefs = getSharedPreferences(ALIAS_PREFS, MODE_PRIVATE)
         prefs.all.forEach { (mac, name) ->
@@ -189,16 +195,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Save a user-defined nickname for a BRRBOX. */
     private fun saveAlias(mac: String, alias: String) {
         getSharedPreferences(ALIAS_PREFS, MODE_PRIVATE).edit().putString(mac, alias).apply()
         deviceAliases[mac] = alias
     }
-
+    /** Delete all device nicknames. */
     private fun deleteAlias(mac: String) {
         getSharedPreferences(ALIAS_PREFS, MODE_PRIVATE).edit().remove(mac).apply()
         deviceAliases.remove(mac)
     }
 
+    /** Activity result launcher for requesting permissions. */
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -209,6 +217,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Activity result launcher for opening a file. */
     private val openFileLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             contentResolver.openInputStream(it)?.use { stream ->
@@ -217,6 +226,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Adds a timestamped message to the debug log. Capped at 100 entries. **/
     private fun addLog(message: String) {
         val currentLog = debugLog.value.toMutableList()
         currentLog.add(0, LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))+"  "+message)
@@ -226,6 +236,8 @@ class MainActivity : ComponentActivity() {
         debugLog.value = currentLog
         Log.d("BRRBOX", message)
     }
+
+    /** Logs all discovered devices and auto-connects when the target MAC address is found */
     private val scanMACCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             if (ActivityCompat.checkSelfPermission(
@@ -297,6 +309,7 @@ class MainActivity : ComponentActivity() {
             }
     }
 
+    /** Logs all BLE advertisements, adds BRRBOXes to the list. */
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult?) {
             if (ActivityCompat.checkSelfPermission(
@@ -364,6 +377,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Manages connection to an active BRRBOX. */
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
             when (newState) {
@@ -498,8 +512,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-
-
+    /** Parses a complete message, handling statuses, logging data, and temperature updates. */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun processMessage(message: String) {
         addLog("From BRRBOX: $message")
@@ -566,6 +579,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** The first screen. Used to lock, unlock, and change the temperature of the connected BRRBOX. */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun CommandScreen(modifier: Modifier = Modifier) {
@@ -642,6 +656,7 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
+    /** The second screen. Shows a live thermometer graphic depicting inside and outside temperature. */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun MonitorScreen(modifier: Modifier = Modifier) {
@@ -727,6 +742,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    /** The third screen. Shows a line chart of temperature data with get/save controls. */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun TempDataScreen(modifier: Modifier = Modifier) {
@@ -963,6 +979,7 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
+    /** The fourth screen. Scans for nearby BRRBOX devices, and allows connecting to and renaming them. */
     @Composable
     fun BluetoothScreen(modifier: Modifier = Modifier) {
         val scope = rememberCoroutineScope()
@@ -1090,6 +1107,7 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
+    /** The fifth screen. Login page. Connects to Supabase. */
     @Composable
     fun LoginScreen(modifier: Modifier = Modifier) {
         var emailInput by remember { mutableStateOf("") }
@@ -1293,6 +1311,7 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    /** The sixth screen. Debug settings, Temperature unit preference, MAC-connect debug button, custom commands, debug logging. */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun SettingsScreen(modifier: Modifier = Modifier) {
@@ -1497,6 +1516,7 @@ class MainActivity : ComponentActivity() {
         SETTINGS("settings", "Settings",Icons.Default.Settings,"Settings Page"),
     }
 
+    /** Called when the app is launched. */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -1513,6 +1533,7 @@ class MainActivity : ComponentActivity() {
         val bluetoothManager = getSystemService(BLUETOOTH_SERVICE) as BluetoothManager
         bluetoothAdapter = bluetoothManager.adapter
 
+        loadTempUnit()
         loadAliases()
         requestBluetoothPermissions()
 
@@ -1523,6 +1544,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Writes each destination to its corresponding screen. */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun AppNavHost(
@@ -1549,6 +1571,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** The root scaffold of the app. Features the bottom navigation bar that hosts all destination screens. */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     @Composable
     fun MainScreen(modifier: Modifier = Modifier) {
@@ -1583,6 +1606,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Requests important bluetooth permissions. */
     @RequiresApi(Build.VERSION_CODES.S)
     fun requestBluetoothPermissions() {
         val permissions = mutableListOf(
@@ -1593,6 +1617,7 @@ class MainActivity : ComponentActivity() {
         requestPermissionLauncher.launch(permissions.toTypedArray())
     }
 
+    /** Scans for nearby BRRBOXes for 10 seconds. Populates discoveredBRRBOXList with results. */
     fun scanForBRRBOX() {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN)
             != PackageManager.PERMISSION_GRANTED ||
@@ -1634,6 +1659,7 @@ class MainActivity : ComponentActivity() {
         }, 10_000)
     }
 
+    /** Searches and connects to a BRRBOX with the provided MAC address. */
     fun connectToMacAddress(macToSearch: String) {
         discoveredDevices.clear()
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED ||
@@ -1682,6 +1708,7 @@ class MainActivity : ComponentActivity() {
         }, 10000)
     }
 
+    /** An element of the BRRBOX device list. */
     @Composable
     fun ListRow(
         item: ScannedDevice,
@@ -1739,6 +1766,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Fakes connection to a BRRBOX to enable other button functionality. */
     fun debugConnect() {
         if (isConnected.value) {
             isConnected.value = false
@@ -1751,6 +1779,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Writes the provided command string to the RX characteristic of the connected BRRBOX. */
     @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     fun sendCommand(command: String) {
         if (ActivityCompat.checkSelfPermission(
@@ -1782,6 +1811,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Used to parse csv lines into logEntries for charting. */
     private fun parseLines(lines : List<String>) {
         logEntries.clear()
         lines.drop(1).forEach { line ->
@@ -1794,6 +1824,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** The window for temperature control. */
     @Composable
     fun TemperatureDialog(
         onDismiss: () -> Unit,
@@ -2061,6 +2092,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Dialog listing saved csv log files from app storage. */
     @Composable
     fun GetSavedLogDialog(
         onDismissRequest: () -> Unit,
@@ -2147,6 +2179,7 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    /** Generic two-button alert dialog. */
     @Composable
     fun GlobalAlertDialog(
         onDismissRequest: () -> Unit,
@@ -2191,6 +2224,7 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    /** Generic text input dialog with a validated text field for arbitrary input. */
     @Composable
     fun GlobalTextInputDialog(
         onDismissRequest: () -> Unit,
@@ -2259,12 +2293,14 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    /** Displays a short message at the bottom of the screen. Used for simple user response. */
     fun simpleAlert(message: String){
         runOnUiThread {
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
         }
     }
 
+    /** An animated canvas thermometer graphic with color-coded markings. */
     @Composable
     fun ThermometerGraphic(
         temperatureCelsius: Float,
@@ -2394,6 +2430,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Adjusts the X-axis of the logging graph based on the currently visible time range. */
     private fun updateXAxisGranularity(chart: LineChart) {
         val visibleRange = chart.visibleXRange
         val granularityHours = when {
@@ -2410,7 +2447,7 @@ class MainActivity : ComponentActivity() {
         chart.xAxis.setLabelCount(6, false)
         chart.invalidate()
     }
-
+    /** Adjusts the Y-axis of the logging graph based on the currently visible temperature range. */
     private fun updateYAxisGranularity(chart: LineChart) {
         val transformer = chart.getTransformer(YAxis.AxisDependency.LEFT)
         val bounds = chart.contentRect
@@ -2428,8 +2465,7 @@ class MainActivity : ComponentActivity() {
         }
         chart.invalidate()
     }
-
-    // FINAL PROJECT - SECURITY SYSTEM
+    /** Queries Supabase and runs through the data checking flowchart. */
     private suspend fun validateAndConnect(item: ScannedDevice): Boolean {
         val user = supabase.auth.currentUserOrNull()
 
@@ -2515,7 +2551,7 @@ class MainActivity : ComponentActivity() {
         addLog("Ownership verified for \"$deviceName\". Secret key cached. Proceeding to connect.")
         return true
     }
-
+    /** Disconnects and closes the GATT connection. */
     fun disconnect() {
         if (ActivityCompat.checkSelfPermission(
                 this,
@@ -2534,7 +2570,7 @@ class MainActivity : ComponentActivity() {
         pendingSecretKey = null
         addLog("Disconnected")
     }
-
+    /** Called when the app is closed. */
     override fun onDestroy() {
         super.onDestroy()
         disconnect()
