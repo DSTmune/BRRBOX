@@ -542,7 +542,6 @@ class MainActivity : ComponentActivity() {
                         gatt?.discoverServices()
                     }
                 }
-
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     isConnecting.value = false
                     isAuthenticating.value = false
@@ -557,6 +556,7 @@ class MainActivity : ComponentActivity() {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 isConnecting.value = false
 
+                // log every discovered service and its characteristics for debugging. could be removed in the future
                 gatt?.services?.forEach { service ->
                     addLog("Service: ${service.uuid}")
                     service.characteristics.forEach { char ->
@@ -568,15 +568,16 @@ class MainActivity : ComponentActivity() {
                 val txChar = service?.getCharacteristic(TX_CHARACTERISTIC_UUID)
 
                 if (txChar != null) {
+                    // enable local notification routing for the TX characteristic
                     gatt.setCharacteristicNotification(txChar, true)
+
+                    // write to the Client Characteristic Configuration Descriptor to tell the
+                    // remote device to actually start sending notifications over the air
                     val descriptor = txChar.getDescriptor(
                         UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
                     )
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        gatt.writeDescriptor(
-                            descriptor,
-                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        )
+                        gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                     } else {
                         @Suppress("DEPRECATION")
                         descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
@@ -587,13 +588,13 @@ class MainActivity : ComponentActivity() {
                 } else {
                     addLog("TX characteristic not found!")
                 }
-
                 // send secret key to verify device
                 val key = pendingSecretKey
                 if (key != null) {
                     isAuthenticating.value = true
                     addLog("Sending secret key for validation...")
                     lifecycleScope.launch {
+                        // small delay to ensure the descriptor write completes before sending the key
                         delay(500)
                         if (ActivityCompat.checkSelfPermission(
                                 this@MainActivity,
@@ -625,11 +626,11 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 } else {
+                    // no key means we're in debug mode — skip auth and mark as connected immediately
                     isConnected.value = true
                     addLog("No secret key provided — skipping auth (debug mode)")
                     simpleAlert("Connected!")
                 }
-
             } else {
                 addLog("Service discovery failed: $status")
             }
@@ -653,6 +654,8 @@ class MainActivity : ComponentActivity() {
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray
         ) {
+            // BLE packets can arrive fragmented, so append to a buffer and only
+            // process complete lines (delimited by newline) to avoid partial messages
             receiveBuffer.append(value.toString(Charsets.UTF_8))
 
             while (receiveBuffer.contains('\n')) {
@@ -678,9 +681,10 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        // microcontroller requires a newline to mark the end of every command
         val message = command + "\n"
 
-        addLog("Sending message: $message")
+        // suppress key logging to avoid leaking the secret key into the debug log
         if (!message.startsWith("K")) {
             addLog("Sending message: $message")
         }
@@ -736,6 +740,10 @@ class MainActivity : ComponentActivity() {
     private fun processMessage(message: String) {
         addLog("From BRRBOX: $message")
 
+        // Status Codes
+        // messages matching "X??" are hex status codes from the BRRBOX.
+        // XAA = auth accepted, XA0 = auth rejected, XA1 = key not yet received,
+        // X00-X04 = operation confirmations, X10-X12 = battery/logging, XE? = errors
         if (message.matches(Regex("X[0-9A-Fa-f]{2}"))) {
             val code = message.removePrefix("X").toInt(16) and 0xFF
             when (code) {
@@ -745,19 +753,17 @@ class MainActivity : ComponentActivity() {
                     addLog("Secret key accepted — device ready.")
                     simpleAlert("Connected!")
                 }
-
                 0xA0 -> {
                     isAuthenticating.value = false
                     addLog("Secret key rejected by BRRBOX.")
                     simpleAlert("Authentication failed: invalid key.")
                     disconnect()
                 }
-
                 0xA1 -> {
+                    // BRRBOX sends this if it receives any message before the key, resend
                     addLog("BRRBOX still waiting for secret key. Sending again.")
                     sendCommand("K$pendingSecretKey")
                 }
-
                 0x00 -> simpleAlert("Message received!")
                 0x01 -> simpleAlert("Connected to BRRBOX!")
                 0x02 -> simpleAlert("Device locked successfully.")
@@ -765,15 +771,15 @@ class MainActivity : ComponentActivity() {
                 0x04 -> simpleAlert("Temperature set successfully.")
                 0x10 -> simpleAlert("Warning: Low battery!")
                 0x11 -> {
+                    // X11 signals the start of a log stream — clear old data and start collecting
                     simpleAlert("Receiving log data...")
                     receivingLoggingData.value = true
                     logEntries.clear()
                 }
-
                 0x12 -> {
+                    // X12 signals the end of the log stream
                     receivingLoggingData.value = false
                 }
-
                 0xE0 -> simpleAlert("Error received from BRRBOX.")
                 0xE1 -> simpleAlert("Error received from BRRBOX: No logging data available!")
                 0xE2 -> simpleAlert("Lid currently open, cannot lock.")
@@ -782,19 +788,23 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        // Log Data
+        // format: "THH:MM:SS,<temp>": only collected while receivingLoggingData is true
         if (receivingLoggingData.value && message.matches(Regex("T\\d{2}:\\d{2}:\\d{2},-?\\d+\\.?\\d*"))) {
             val (time, temp) = message.removePrefix("T").split(",")
             val parts = time.split(":")
-            val elapsedHours =
-                parts[0].toFloat() + parts[1].toFloat() / 60f + parts[2].toFloat() / 3600f
+            // convert HH:MM:SS timestamp to a single float (hours) for the X axis
+            val elapsedHours = parts[0].toFloat() + parts[1].toFloat() / 60f + parts[2].toFloat() / 3600f
             val temperature = temp.toFloat()
             logEntries.add(Entry(elapsedHours, temperature))
         }
 
+        // Live Temperature
+        // format: "M<inside>[+/-<outside>]" — sent periodically in response to "M" poll command
         if (message.startsWith("M")) {
-            currentTempCelsius.value =
-                message.removePrefix("M").toFloatOrNull() ?: currentTempCelsius.value
+            currentTempCelsius.value = message.removePrefix("M").toFloatOrNull() ?: currentTempCelsius.value
             val payload = message.removePrefix("M")
+            // split on sign characters to separate inside and outside temperature values
             val parts = payload.split(Regex("(?=[+-])")).filter { it.isNotEmpty() }
             if (parts.size >= 2) {
                 currentTempCelsius.value = parts[0].toFloatOrNull() ?: currentTempCelsius.value
@@ -2057,6 +2067,9 @@ class MainActivity : ComponentActivity() {
             return "$sign%05.1f".format(Math.abs(value))
         }
 
+        // builds the "T" command string in the format the BRRBOX expects:
+        // T<signed lo><signed hi>, e.g. "T-005.0+005.0"
+        // single mode sends ±0.1° around the chosen temperature
         fun buildCommand(): String {
             return if (isRangeMode) {
                 val lo = toCelsius(minVal!!)
