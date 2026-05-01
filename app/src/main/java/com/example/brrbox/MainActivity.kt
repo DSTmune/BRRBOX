@@ -1897,7 +1897,10 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.Center
                 ) {
                     Button(
-                        onClick = { connectToMacAddress(BRRBOX_MAC) },
+                        onClick = {
+                            pendingSecretKey = "01xQw1U6icORyaY0"
+                            connectToMacAddress(BRRBOX_MAC)
+                        },
                         enabled = !isConnected.value && !isConnecting.value,
                         modifier = Modifier.weight(10f)
                     ) {
